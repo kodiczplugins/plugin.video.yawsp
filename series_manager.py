@@ -35,6 +35,12 @@ EPISODE_PATTERNS = [
     r'(\d+)\.\s*(\d+)'      # 1.01 format
 ]
 
+def _normalize(text):
+    """Normalize text for comparisons."""
+    # Replace non-word characters (including underscore) with spaces and
+    # convert to lower case for easier matching.
+    return re.sub(r'[\W_]+', ' ', text).strip().lower()
+
 class SeriesManager:
     def __init__(self, addon, profile):
         self.addon = addon
@@ -68,6 +74,12 @@ class SeriesManager:
             f"{series_name} s01",           # name + s01
             f"{series_name} episode"        # name + episode
         ]
+
+        # Add variations where spaces are replaced with common separators
+        if ' ' in series_name:
+            search_queries.append(series_name.replace(' ', '.'))
+            search_queries.append(series_name.replace(' ', '-'))
+            search_queries.append(series_name.replace(' ', ''))
         
         all_results = []
         
@@ -103,25 +115,25 @@ class SeriesManager:
     
     def _is_likely_episode(self, filename, series_name):
         """Check if a filename is likely to be an episode of the series"""
-        # Skip if doesn't contain series name
-        if not re.search(re.escape(series_name), filename, re.IGNORECASE):
+        norm_fn = _normalize(filename)
+        norm_sn = _normalize(series_name)
+
+        # Skip if normalized series name is not present in filename
+        if norm_sn not in norm_fn:
             return False
-            
+
         # Positive indicators
         for pattern in EPISODE_PATTERNS:
-            if re.search(pattern, filename, re.IGNORECASE):
+            if re.search(pattern, norm_fn, re.IGNORECASE):
                 return True
-                
+
         # Keywords that suggest it's a episode
-        episode_keywords = [
-            'episode', 'season', 'series', 'ep', 
-            'complete', 'serie', 'season', 'disk'
-        ]
-        
+        episode_keywords = ['episode', 'season', 'series', 'ep', 'complete', 'serie', 'season', 'disk']
+
         for keyword in episode_keywords:
-            if keyword in filename.lower():
+            if keyword in norm_fn:
                 return True
-                
+
         return False
     
     def _perform_search(self, search_query, api_function, token):
@@ -155,8 +167,12 @@ class SeriesManager:
     
     def _detect_episode_info(self, filename, series_name):
         """Try to detect season and episode numbers from filename"""
-        # Remove series name and clean up the string
-        cleaned = filename.lower().replace(series_name.lower(), '').strip()
+        # Normalize filename and series name for easier matching
+        norm_fn = _normalize(filename)
+        norm_sn = _normalize(series_name)
+
+        # Remove the series name from the filename and clean up the string
+        cleaned = norm_fn.replace(norm_sn, '').strip()
         
         # Try each of our patterns
         for pattern in EPISODE_PATTERNS:
@@ -170,9 +186,9 @@ class SeriesManager:
                     return 1, int(groups[0])
         
         # If no match found, try to infer from the filename
-        if 'season' in cleaned.lower() or 'serie' in cleaned.lower():
+        if 'season' in cleaned or 'serie' in cleaned:
             # Try to find season number
-            season_match = re.search(r'season\s*(\d+)', cleaned.lower())
+            season_match = re.search(r'season\s*(\d+)', cleaned)
             if season_match:
                 season_num = int(season_match.group(1))
                 # Try to find episode number
