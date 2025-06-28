@@ -280,7 +280,7 @@ def dosearch(token, what, category, sort, limit, offset, action):
         popinfo(_addon.getLocalizedString(30107), icon=xbmcgui.NOTIFICATION_WARNING)
 
 def search(params):
-    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \ " + _addon.getLocalizedString(30201))
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + _addon.getLocalizedString(30201))
     token = revalidate()
     
     updateListing=False
@@ -346,7 +346,7 @@ def search(params):
     xbmcplugin.endOfDirectory(_handle, updateListing=updateListing)
 
 def queue(params):
-    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \ " + _addon.getLocalizedString(30202))
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + _addon.getLocalizedString(30202))
     token = revalidate()
     updateListing=False
     
@@ -381,7 +381,7 @@ def toqueue(ident,token):
         popinfo(_addon.getLocalizedString(30107), icon=xbmcgui.NOTIFICATION_WARNING)
 
 def history(params):
-    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \ " + _addon.getLocalizedString(30203))
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + _addon.getLocalizedString(30203))
     token = revalidate()
     updateListing=False
     
@@ -731,7 +731,7 @@ def series_search(params):
 
 def series_detail(params):
     """Show seasons for a series"""
-    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \ " + params['series_name'])
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + params['series_name'])
     
     # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)
@@ -744,7 +744,7 @@ def series_season(params):
     series_name = params['series_name']
     season = params['season']
     
-    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \ " + series_name + " \ " + f"Rada {season}")
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + series_name + " \\ " + f"Rada {season}")
     
     # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)

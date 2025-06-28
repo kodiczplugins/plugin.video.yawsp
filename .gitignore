@@ -29,4 +29,6 @@ Thumbs.db
 # Local configuration
 .env
 .env.local
+
 search_test_results.json
+production_test_results.json
