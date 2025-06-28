@@ -322,6 +322,8 @@ def search(params):
             what = ask(what)
             if what is not None:
                 storesearch(what)
+                # Ensure the container refreshes with the new search results
+                updateListing = True
             else:
                 updateListing = True
 
