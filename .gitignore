@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+/Cargo.lock
+
+# IDE files
+/.idea/
+/.vscode/
+
+# Development tools
+/.cargo/
+/.claude/
+
+# Examples and temporary files
+/example/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Rust specific
+**/*.rs.bk
+*.pdb
+
+# Local configuration
+.env
+.env.local
+search_test_results.json

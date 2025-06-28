@@ -89,19 +89,48 @@ class SeriesManager:
             'seasons': {}
         }
         
-        # Define search queries to try
+        # Define search queries to try - prioritize season-specific searches
         search_queries = [
-            series_name,                    # exact name
+            f"{series_name} s01",           # name + s01 (most reliable)
+            f"{series_name} s02",           # name + s02
+            f"{series_name} s03",           # name + s03
+            f"{series_name} s04",           # name + s04
+            f"{series_name} s05",           # name + s05
+            series_name,                    # exact name (fallback)
             f"{series_name} season",        # name + season
-            f"{series_name} s01",           # name + s01
-            f"{series_name} episode"        # name + episode
+            f"{series_name} episode",       # name + episode
+            f"{series_name} 1080p",         # name + quality
+            f"{series_name} 720p",          # name + quality
+            f"{series_name} 2160p",         # name + 4K quality
+            f"{series_name} webrip",        # name + release type
+            f"{series_name} bluray",        # name + release type
+            f"{series_name} web-dl",        # name + release type
         ]
 
         # Add variations where spaces are replaced with common separators
+        base_variations = [series_name]
         if ' ' in series_name:
-            search_queries.append(series_name.replace(' ', '.'))
-            search_queries.append(series_name.replace(' ', '-'))
-            search_queries.append(series_name.replace(' ', ''))
+            base_variations.extend([
+                series_name.replace(' ', '.'),
+                series_name.replace(' ', '-'),
+                series_name.replace(' ', '')
+            ])
+        
+        # For each base variation, add season-specific searches
+        for base in base_variations:
+            if base != series_name:  # Don't duplicate the exact name
+                search_queries.append(base)
+            search_queries.extend([
+                f"{base} s01",
+                f"{base} s02", 
+                f"{base} s03",
+                f"{base}.s01",
+                f"{base}.s02",
+                f"{base}.s03",
+                f"{base}-s01",
+                f"{base}-s02",
+                f"{base}-s03"
+            ])
         
         all_results = []
         
@@ -158,31 +187,45 @@ class SeriesManager:
         return False
     
     def _perform_search(self, search_query, api_function, token):
-        """Perform the actual search using the provided API function"""
+        """Perform the actual search using the provided API function with pagination"""
         results = []
+        limit = 100
+        max_results = 300  # Limit total results to avoid excessive API calls
         
-        # Call the Webshare API to search for the series
-        response = api_function('search', {
-            'what': search_query, 
-            'category': 'video', 
-            'sort': 'recent',
-            'limit': 100,  # Get a good number of results to find episodes
-            'offset': 0,
-            'wst': token,
-            'maybe_removed': 'true'
-        })
-        
-        xml = ET.fromstring(response.content)
-        
-        # Check if the search was successful
-        status = xml.find('status')
-        if status is not None and status.text == 'OK':
-            # Convert XML to a list of dictionaries
-            for file in xml.iter('file'):
-                item = {}
-                for elem in file:
-                    item[elem.tag] = elem.text
-                results.append(item)
+        for offset in range(0, max_results, limit):
+            # Call the Webshare API to search for the series
+            response = api_function('search', {
+                'what': search_query, 
+                'category': 'video', 
+                'sort': 'recent',
+                'limit': limit,
+                'offset': offset,
+                'wst': token,
+                'maybe_removed': 'true'
+            })
+            
+            xml = ET.fromstring(response.content)
+            
+            # Check if the search was successful
+            status = xml.find('status')
+            if status is not None and status.text == 'OK':
+                page_results = []
+                # Convert XML to a list of dictionaries
+                for file in xml.iter('file'):
+                    item = {}
+                    for elem in file:
+                        item[elem.tag] = elem.text
+                    page_results.append(item)
+                
+                # If we got fewer results than the limit, we've reached the end
+                if len(page_results) < limit:
+                    results.extend(page_results)
+                    break
+                
+                results.extend(page_results)
+            else:
+                # API error or no more results
+                break
         
         return results
     
