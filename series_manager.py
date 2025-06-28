@@ -41,6 +41,28 @@ def _normalize(text):
     # convert to lower case for easier matching.
     return re.sub(r'[\W_]+', ' ', text).strip().lower()
 
+def _is_series_match(filename, series_name):
+    """Check if filename contains the series name with flexible matching."""
+    norm_fn = _normalize(filename)
+    norm_sn = _normalize(series_name)
+    
+    # Split series name into words for flexible matching
+    series_words = norm_sn.split()
+    
+    # If series name is a single word, check if it appears as a word boundary
+    if len(series_words) == 1:
+        # Use word boundary matching to avoid partial matches
+        pattern = r'\b' + re.escape(series_words[0]) + r'\b'
+        return bool(re.search(pattern, norm_fn))
+    
+    # For multi-word series names, check if all words appear in order
+    # This allows for some flexibility in separators
+    for word in series_words:
+        if word not in norm_fn:
+            return False
+    
+    return True
+
 class SeriesManager:
     def __init__(self, addon, profile):
         self.addon = addon
@@ -115,12 +137,11 @@ class SeriesManager:
     
     def _is_likely_episode(self, filename, series_name):
         """Check if a filename is likely to be an episode of the series"""
-        norm_fn = _normalize(filename)
-        norm_sn = _normalize(series_name)
-
-        # Skip if normalized series name is not present in filename
-        if norm_sn not in norm_fn:
+        # Use the new flexible series matching
+        if not _is_series_match(filename, series_name):
             return False
+
+        norm_fn = _normalize(filename)
 
         # Positive indicators
         for pattern in EPISODE_PATTERNS:
@@ -171,8 +192,14 @@ class SeriesManager:
         norm_fn = _normalize(filename)
         norm_sn = _normalize(series_name)
 
-        # Remove the series name from the filename and clean up the string
-        cleaned = norm_fn.replace(norm_sn, '').strip()
+        # Remove the series name from the filename more intelligently
+        cleaned = norm_fn
+        series_words = norm_sn.split()
+        for word in series_words:
+            # Remove each word of the series name with word boundaries
+            pattern = r'\b' + re.escape(word) + r'\b'
+            cleaned = re.sub(pattern, '', cleaned)
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
         # Try each of our patterns
         for pattern in EPISODE_PATTERNS:
