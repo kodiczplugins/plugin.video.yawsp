@@ -404,6 +404,18 @@ class SeriesManager:
 
         return series_list
 
+    def remove_series(self, series_name):
+        """Remove a series from the database"""
+        safe_name = self._safe_filename(series_name)
+        file_path = os.path.join(self.series_db_path, f"{safe_name}.json")
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return True
+        except Exception as e:
+            xbmc.log(f'YaWSP Series Manager: Error removing series: {str(e)}', level=xbmc.LOGERROR)
+        return False
+
     def _safe_filename(self, name):
         """Convert a series name to a safe filename"""
         # Replace problematic characters
@@ -418,7 +430,7 @@ def get_url(**kwargs):
     return '{0}?{1}'.format(_url, urlencode(kwargs, 'utf-8'))
 
 
-def create_series_menu(series_manager, handle):
+def create_series_menu(series_manager, handle, end=True):
     """Create the series selection menu"""
     import xbmcplugin
 
@@ -432,9 +444,14 @@ def create_series_menu(series_manager, handle):
     for series in series_list:
         listitem = xbmcgui.ListItem(label=series['name'])
         listitem.setArt({'icon': 'DefaultFolder.png'})
+        commands = []
+        commands.append((series_manager.addon.getLocalizedString(30213),
+                         'Container.Update(' + get_url(action='series', remove=series['name']) + ')'))
+        listitem.addContextMenuItems(commands)
         xbmcplugin.addDirectoryItem(handle, get_url(action='series_detail', series_name=series['name']), listitem, True)
 
-    xbmcplugin.endOfDirectory(handle)
+    if end:
+        xbmcplugin.endOfDirectory(handle)
 
 
 def create_seasons_menu(series_manager, handle, series_name):

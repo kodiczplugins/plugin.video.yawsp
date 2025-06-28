@@ -719,10 +719,16 @@ def menu():
 
 def series_menu(params):
     """Handle Series functionality"""
+    updateListing = False
     # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)
 
-    series_manager.create_series_menu(sm, _handle)
+    if 'remove' in params:
+        sm.remove_series(params['remove'])
+        updateListing = True
+
+    series_manager.create_series_menu(sm, _handle, end=False)
+    xbmcplugin.endOfDirectory(_handle, updateListing=updateListing)
 
 
 def series_search(params):
