@@ -207,7 +207,12 @@ class SeriesManager:
                 'maybe_removed': 'true'
             })
 
-            xml = ET.fromstring(response.content)
+            try:
+                xml = ET.fromstring(response.content)
+            except ET.ParseError as e:
+                xbmc.log(f'YaWSP Series Manager: XML Parse Error for query "{search_query}": {str(e)}', level=xbmc.LOGERROR)
+                xbmc.log(f'YaWSP Series Manager: Response content: {response.content[:200]}', level=xbmc.LOGERROR)
+                continue
 
             # Check if the search was successful
             status = xml.find('status')
