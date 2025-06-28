@@ -688,6 +688,11 @@ def db(params):
 def menu():
     revalidate()
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name'))
+    # Add Series Manager menu item
+    listitem = xbmcgui.ListItem(label='Serialy')
+    listitem.setArt({'icon': 'DefaultTVShows.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
+
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30201))
     listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='search'), listitem, True)
@@ -699,11 +704,6 @@ def menu():
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30203))
     listitem.setArt({'icon': 'DefaultAddonsUpdates.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='history'), listitem, True)
-
-    # Add Series Manager menu item
-    listitem = xbmcgui.ListItem(label='Serialy')
-    listitem.setArt({'icon': 'DefaultTVShows.png'})
-    xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
 
     if 'true' == _addon.getSetting('experimental'):
         listitem = xbmcgui.ListItem(label='Backup DB')

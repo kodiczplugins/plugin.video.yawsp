@@ -145,7 +145,7 @@ class SeriesManager:
                 if result not in all_results and self._is_likely_episode(result['name'], series_name):
                     all_results.append(result)
 
-        # Process results and organize into seasons
+        # Process results and organize into seasons with quality/language preference
         for item in all_results:
             season_num, episode_num = self._detect_episode_info(item['name'], series_name)
             if season_num is not None:
@@ -156,11 +156,27 @@ class SeriesManager:
                 if season_num_str not in series_data['seasons']:
                     series_data['seasons'][season_num_str] = {}
 
-                series_data['seasons'][season_num_str][episode_num_str] = {
-                    'name': item['name'],
-                    'ident': item['ident'],
-                    'size': item.get('size', '0')
-                }
+                # Check if we already have this episode
+                current_episode = series_data['seasons'][season_num_str].get(episode_num_str)
+                
+                if current_episode is None:
+                    # First file for this episode
+                    series_data['seasons'][season_num_str][episode_num_str] = {
+                        'name': item['name'],
+                        'ident': item['ident'],
+                        'size': item.get('size', '0')
+                    }
+                else:
+                    # Compare with existing file and keep the better one
+                    new_score = self._calculate_file_score(item['name'], item.get('size', '0'))
+                    current_score = self._calculate_file_score(current_episode['name'], current_episode['size'])
+                    
+                    if new_score > current_score:
+                        series_data['seasons'][season_num_str][episode_num_str] = {
+                            'name': item['name'],
+                            'ident': item['ident'],
+                            'size': item.get('size', '0')
+                        }
 
         # Save the series data
         self._save_series_data(series_name, series_data)
@@ -188,6 +204,60 @@ class SeriesManager:
                 return True
 
         return False
+
+    def _calculate_file_score(self, filename, file_size):
+        """Calculate preference score for a file based on language and quality indicators"""
+        score = 0
+        filename_lower = filename.lower()
+        
+        # Czech language indicators (highest priority)
+        czech_indicators = ['cz', 'czech', 'čeština', 'dabing', 'titulky', 'cztit', 'cestina']
+        for indicator in czech_indicators:
+            if indicator in filename_lower:
+                score += 100
+                break  # Only count once
+        
+        # Quality indicators - extract resolution number
+        import re
+        resolution_match = re.search(r'(\d+)p', filename_lower)
+        if resolution_match:
+            resolution = int(resolution_match.group(1))
+            # Score based on resolution height
+            if resolution >= 2160:  # 4K and above
+                score += 40
+            elif resolution >= 1440:  # 1440p, 1600p, etc.
+                score += 35
+            elif resolution >= 1080:  # 1080p, 1200p, etc.
+                score += 30
+            elif resolution >= 720:   # 720p, 900p, etc.
+                score += 20
+            elif resolution >= 480:   # 480p, 576p, etc.
+                score += 10
+            else:  # Lower resolutions
+                score += 5
+        
+        # Special case for 4K without 'p'
+        if '4k' in filename_lower:
+            score += 40
+        
+        # File size bonus (larger files usually better quality)
+        try:
+            size_bytes = int(file_size)
+            # Add small bonus for larger files (1 point per GB)
+            size_gb = size_bytes / (1024 * 1024 * 1024)
+            score += min(size_gb, 10)  # Cap at 10 points
+        except (ValueError, TypeError):
+            pass
+        
+        # Prefer certain release types
+        if 'bluray' in filename_lower or 'blu-ray' in filename_lower:
+            score += 15
+        elif 'web-dl' in filename_lower:
+            score += 10
+        elif 'webrip' in filename_lower:
+            score += 5
+        
+        return score
 
     def _perform_search(self, search_query, api_function, token):
         """Perform the actual search using the provided API function with pagination"""

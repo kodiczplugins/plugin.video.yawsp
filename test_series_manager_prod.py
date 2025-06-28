@@ -167,10 +167,82 @@ def test_series_manager_with_real_code():
         # Clean up
         shutil.rmtree(temp_dir)
 
+def test_quality_selection():
+    """Test the quality and language selection logic"""
+    print("\n=== Testing Quality Selection Logic ===")
+    
+    # Create SeriesManager instance for testing
+    mock_addon = MockAddon()
+    sm = series_manager.SeriesManager(mock_addon, '/tmp/test')
+    
+    print("\n1. Testing Czech language priority:")
+    czech_720p = sm._calculate_file_score("Stargate.S01E01.720p.CZ.mkv", "1000000000")
+    english_1080p = sm._calculate_file_score("Stargate.S01E01.1080p.EN.mkv", "2000000000")
+    print(f"   Czech 720p score: {czech_720p}")
+    print(f"   English 1080p score: {english_1080p}")
+    assert czech_720p > english_1080p, "Czech 720p should beat English 1080p"
+    print("   ✅ Czech language gets priority over higher resolution")
+    
+    print("\n2. Testing resolution scoring:")
+    test_cases = [
+        ("Series.S01E01.2160p.mkv", "4K"),
+        ("Series.S01E01.1440p.mkv", "1440p"),
+        ("Series.S01E01.1080p.mkv", "1080p"),
+        ("Series.S01E01.720p.mkv", "720p"),
+        ("Series.S01E01.480p.mkv", "480p"),
+    ]
+    
+    scores = []
+    for filename, label in test_cases:
+        score = sm._calculate_file_score(filename, "2000000000")
+        scores.append(score)
+        print(f"   {label}: {score} points")
+    
+    # Check that higher resolutions get higher scores
+    for i in range(len(scores) - 1):
+        assert scores[i] >= scores[i+1], f"Higher resolution should score higher or equal"
+    print("   ✅ Resolution scoring works correctly")
+    
+    print("\n3. Testing Czech indicators:")
+    czech_indicators = ['cz', 'czech', 'dabing', 'titulky', 'cztit']
+    for indicator in czech_indicators:
+        filename = f"Series.S01E01.1080p.{indicator}.mkv"
+        score = sm._calculate_file_score(filename, "1000000000")
+        assert score >= 100, f"File with '{indicator}' should get Czech bonus"
+        print(f"   ✅ '{indicator}' detected: {score} points")
+    
+    print("\n4. Testing release type preferences:")
+    bluray_score = sm._calculate_file_score("Series.S01E01.1080p.BluRay.mkv", "2000000000")
+    webdl_score = sm._calculate_file_score("Series.S01E01.1080p.WEB-DL.mkv", "2000000000")
+    webrip_score = sm._calculate_file_score("Series.S01E01.1080p.WEBRip.mkv", "2000000000")
+    
+    print(f"   BluRay: {bluray_score} points")
+    print(f"   WEB-DL: {webdl_score} points") 
+    print(f"   WEBRip: {webrip_score} points")
+    
+    assert bluray_score > webdl_score > webrip_score, "BluRay > WEB-DL > WEBRip"
+    print("   ✅ Release type preferences work correctly")
+    
+    print("\n5. Testing combined scoring:")
+    # Czech 720p vs English 4K
+    czech_720p = sm._calculate_file_score("Series.S01E01.720p.CZ.BluRay.mkv", "1500000000")
+    english_4k = sm._calculate_file_score("Series.S01E01.2160p.EN.WEB-DL.mkv", "5000000000")
+    
+    print(f"   Czech 720p BluRay: {czech_720p} points")
+    print(f"   English 4K WEB-DL: {english_4k} points")
+    assert czech_720p > english_4k, "Czech content should beat higher quality English"
+    print("   ✅ Combined scoring prioritizes Czech content correctly")
+    
+    print("\n✅ ALL QUALITY SELECTION TESTS PASSED!")
+    return True
+
 def main():
     print("=== Production SeriesManager Test ===")
     print("This test calls the actual production series_manager.py code")
     print("Using real API data from our previous test")
+    
+    # Run quality selection tests first
+    test_quality_selection()
     
     # Check if we have the API test data
     if not os.path.exists('search_test_results.json'):
@@ -179,7 +251,7 @@ def main():
         print("   This will generate the real API data needed for this test.")
         return
     
-    # Run the test
+    # Run the production code test
     series_data = test_series_manager_with_real_code()
     
     # Final summary
