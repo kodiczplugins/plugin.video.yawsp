@@ -213,3 +213,15 @@ msgctxt "#30304"
 msgid "Unknown error - "
 msgstr "Neznáma chyba - "
 
+msgctxt "#30401"
+msgid "Trending series"
+msgstr "Trendy seriály"
+
+msgctxt "#30402"
+msgid "Popular series"
+msgstr "Populárne seriály"
+
+msgctxt "#30410"
+msgid "Trakt API client id"
+msgstr "Trakt API klient id"
+

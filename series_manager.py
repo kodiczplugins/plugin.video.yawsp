@@ -449,6 +449,16 @@ def create_series_menu(series_manager, handle, end=True):
     listitem.setArt({'icon': 'DefaultAddSource.png'})
     xbmcplugin.addDirectoryItem(handle, get_url(action='series_search'), listitem, True)
 
+    # Trending from Trakt
+    listitem = xbmcgui.ListItem(label=series_manager.addon.getLocalizedString(30401))
+    listitem.setArt({'icon': 'DefaultRecentlyAddedEpisodes.png'})
+    xbmcplugin.addDirectoryItem(handle, get_url(action='series_trending'), listitem, True)
+
+    # Popular from Trakt
+    listitem = xbmcgui.ListItem(label=series_manager.addon.getLocalizedString(30402))
+    listitem.setArt({'icon': 'DefaultTVShows.png'})
+    xbmcplugin.addDirectoryItem(handle, get_url(action='series_popular'), listitem, True)
+
     # List existing series
     series_list = series_manager.get_all_series()
     for series in series_list:

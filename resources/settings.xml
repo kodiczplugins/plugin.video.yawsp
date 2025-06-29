@@ -18,5 +18,6 @@
 		<setting label="30044" id="dnevery" type="select" values="1%|5%|10%|20%|25%|50%" default="10%" visible="eq(-1,true)" />
         <setting type="sep"/>
         <setting label="30051" id="experimental" type="bool" default="false" />
+        <setting label="30410" id="trakt_client_id" type="text" default="c42f541db36742ea212283636c74ba60db7832025aa642794be50ceec888993c" />
     </category>
 </settings>

@@ -22,6 +22,7 @@ import unidecode
 import re
 import zipfile
 import uuid
+import requests
 import series_manager
 
 try:
@@ -737,8 +738,10 @@ def series_search(params):
     """Search for a TV series and organize it into seasons and episodes"""
     token = revalidate()
 
-    # Ask for series name
-    series_name = ask(None)
+    # Determine series name
+    series_name = params.get('series_name')
+    if not series_name:
+        series_name = ask(None)
     if not series_name:
         xbmcplugin.endOfDirectory(_handle, succeeded=False)
         return
@@ -840,6 +843,70 @@ def series_refresh(params):
         xbmcplugin.endOfDirectory(_handle, succeeded=False)
 
 
+def _trakt_request(endpoint, params=None):
+    """Helper to call Trakt API."""
+    client_id = _addon.getSetting('trakt_client_id')
+    if not client_id:
+        popinfo('Missing Trakt client id', icon=xbmcgui.NOTIFICATION_WARNING)
+        return []
+
+    headers = {
+        'Content-Type': 'application/json',
+        'trakt-api-version': '2',
+        'trakt-api-key': client_id,
+    }
+
+    try:
+        response = _session.get('https://api.trakt.tv/' + endpoint,
+                               headers=headers,
+                               params=params or {}, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            popinfo('Trakt API error', icon=xbmcgui.NOTIFICATION_WARNING)
+    except Exception:
+        traceback.print_exc()
+        popinfo('Trakt API request failed', icon=xbmcgui.NOTIFICATION_WARNING)
+    return []
+
+
+def series_trending(params):
+    """List trending series from Trakt."""
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
+                                _addon.getLocalizedString(30401))
+    data = _trakt_request('shows/trending', {'limit': 20})
+    for item in data:
+        show = item.get('show', {})
+        title = show.get('title')
+        if not title:
+            continue
+        watchers = item.get('watchers', 0)
+        label = f"{title} ({watchers} users)"
+        listitem = xbmcgui.ListItem(label=label)
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_search', series_name=title),
+                                   listitem, True)
+    xbmcplugin.endOfDirectory(_handle)
+
+
+def series_popular(params):
+    """List popular series from Trakt."""
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
+                                _addon.getLocalizedString(30402))
+    data = _trakt_request('shows/popular', {'limit': 20})
+    for show in data:
+        title = show.get('title')
+        if not title:
+            continue
+        listitem = xbmcgui.ListItem(label=title)
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_search', series_name=title),
+                                   listitem, True)
+    xbmcplugin.endOfDirectory(_handle)
+
+
 def router(paramstring):
     params = dict(parse_qsl(paramstring))
     if params:
@@ -864,6 +931,10 @@ def router(paramstring):
             series_menu(params)
         elif params['action'] == 'series_search':
             series_search(params)
+        elif params['action'] == 'series_trending':
+            series_trending(params)
+        elif params['action'] == 'series_popular':
+            series_popular(params)
         elif params['action'] == 'series_detail':
             series_detail(params)
         elif params['action'] == 'series_season':
