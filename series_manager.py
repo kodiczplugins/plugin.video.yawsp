@@ -43,6 +43,7 @@ def _normalize(text):
     return re.sub(r'[\W_]+', ' ', text).strip().lower()
 
 
+
 def _is_series_match(filename, series_name):
     """Check if filename contains the series name with flexible matching."""
     norm_fn = _normalize(filename)
@@ -394,11 +395,20 @@ class SeriesManager:
                     series_name = os.path.splitext(filename)[0]
                     # Convert safe filename back to proper name (rough conversion)
                     proper_name = series_name.replace('_', ' ')
+                    file_path = os.path.join(self.series_db_path, filename)
+                    mtime = 0
+                    try:
+                        mtime = os.path.getmtime(file_path)
+                    except Exception as e:
+                        xbmc.log(f'YaWSP Series Manager: Error accessing {filename}: {str(e)}', level=xbmc.LOGERROR)
                     series_list.append({
                         'name': proper_name,
                         'filename': filename,
-                        'safe_name': series_name
+                        'safe_name': series_name,
+                        'mtime': mtime
                     })
+
+            series_list.sort(key=lambda s: s.get('mtime', 0), reverse=True)
         except Exception as e:
             xbmc.log(f'YaWSP Series Manager: Error listing series: {str(e)}', level=xbmc.LOGERROR)
 

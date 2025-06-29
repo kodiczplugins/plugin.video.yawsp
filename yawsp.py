@@ -743,8 +743,13 @@ def series_search(params):
         xbmcplugin.endOfDirectory(_handle, succeeded=False)
         return
 
-    # Initialize SeriesManager and perform search
+    # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)
+
+    # If series already exists locally, open it without refreshing
+    if sm.load_series_data(series_name):
+        xbmc.executebuiltin(f'Container.Update({get_url(action="series_detail", series_name=series_name)})')
+        return
 
     # Show progress dialog
     progress = xbmcgui.DialogProgress()
