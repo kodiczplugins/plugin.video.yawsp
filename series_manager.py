@@ -25,22 +25,26 @@ try:
 except ImportError:
     from xbmcvfs import translatePath
 
-# Regular expressions for detecting episode patterns
+# Precompiled regular expressions for detecting episode patterns
 EPISODE_PATTERNS = [
-    r'[Ss](\d+)[Ee](\d+)',  # S01E01 format
-    r'(\d+)x(\d+)',  # 1x01 format
-    r'[Ee]pisode\s*(\d+)',  # Episode 1 format
-    r'[Ee]p\s*(\d+)',  # Ep 1 format
-    r'[Ee](\d+)',  # E1 format
-    r'(\d+)\.\s*(\d+)'  # 1.01 format
+    re.compile(r'[Ss](\d+)[Ee](\d+)'),  # S01E01 format
+    re.compile(r'(\d+)x(\d+)'),        # 1x01 format
+    re.compile(r'[Ee]pisode\s*(\d+)'), # Episode 1 format
+    re.compile(r'[Ee]p\s*(\d+)'),      # Ep 1 format
+    re.compile(r'[Ee](\d+)'),           # E1 format
+    re.compile(r'(\d+)\.\s*(\d+)')   # 1.01 format
 ]
+
+# Precompiled regex for normalization
+_NORMALIZE_RE = re.compile(r'[\W_]+')
+_RESOLUTION_RE = re.compile(r'(\d+)p')
 
 
 def _normalize(text):
     """Normalize text for comparisons."""
     # Replace non-word characters (including underscore) with spaces and
     # convert to lower case for easier matching.
-    return re.sub(r'[\W_]+', ' ', text).strip().lower()
+    return _NORMALIZE_RE.sub(' ', text).strip().lower()
 
 
 
@@ -194,11 +198,11 @@ class SeriesManager:
 
         # Positive indicators
         for pattern in EPISODE_PATTERNS:
-            if re.search(pattern, norm_fn, re.IGNORECASE):
+            if pattern.search(norm_fn):
                 return True
 
         # Keywords that suggest it's a episode
-        episode_keywords = ['episode', 'season', 'series', 'ep', 'complete', 'serie', 'season', 'disk']
+        episode_keywords = ['episode', 'season', 'series', 'ep', 'complete', 'serie', 'disk']
 
         for keyword in episode_keywords:
             if keyword in norm_fn:
@@ -219,8 +223,7 @@ class SeriesManager:
                 break  # Only count once
         
         # Quality indicators - extract resolution number
-        import re
-        resolution_match = re.search(r'(\d+)p', filename_lower)
+        resolution_match = _RESOLUTION_RE.search(filename_lower)
         if resolution_match:
             resolution = int(resolution_match.group(1))
             # Score based on resolution height
@@ -325,7 +328,7 @@ class SeriesManager:
 
         # Try each of our patterns
         for pattern in EPISODE_PATTERNS:
-            match = re.search(pattern, cleaned)
+            match = pattern.search(cleaned)
             if match:
                 groups = match.groups()
                 if len(groups) == 2:  # Patterns like S01E02
