@@ -71,22 +71,177 @@ def _is_series_match(filename, series_name):
     return True
 
 
-class SeriesManager:
-    def __init__(self, addon, profile):
-        self.addon = addon
+class BaseManager:
+    """Base manager providing common utilities for Series and Movies."""
+
+    def __init__(self, profile, db_subdir):
+        """Initialize with profile path and database subdirectory."""
         self.profile = profile
-        self.series_db_path = os.path.join(profile, 'series_db')
+        self.db_path = os.path.join(profile, db_subdir)
         self.ensure_db_exists()
 
     def ensure_db_exists(self):
-        """Ensure that the series database directory exists"""
+        """Ensure that the database directory exists."""
         try:
             if not os.path.exists(self.profile):
                 os.makedirs(self.profile)
-            if not os.path.exists(self.series_db_path):
-                os.makedirs(self.series_db_path)
+            if not os.path.exists(self.db_path):
+                os.makedirs(self.db_path)
         except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error creating directories: {str(e)}', level=xbmc.LOGERROR)
+            xbmc.log(f'YaWSP BaseManager: Error creating directories: {str(e)}',
+                     level=xbmc.LOGERROR)
+
+    def _calculate_file_score(self, filename, file_size):
+        """Calculate preference score for a file based on language and quality indicators."""
+        score = 0
+        filename_lower = filename.lower()
+
+        # Czech language indicators (highest priority)
+        czech_indicators = ['cz', 'czech', 'čeština', 'dabing', 'titulky', 'cztit', 'cestina']
+        for indicator in czech_indicators:
+            if indicator in filename_lower:
+                score += 100
+                break  # Only count once
+
+        # Quality indicators - extract resolution number
+        resolution_match = _RESOLUTION_RE.search(filename_lower)
+        if resolution_match:
+            resolution = int(resolution_match.group(1))
+            # Score based on resolution height
+            if resolution >= 2160:  # 4K and above
+                score += 40
+            elif resolution >= 1440:  # 1440p, 1600p, etc.
+                score += 35
+            elif resolution >= 1080:  # 1080p, 1200p, etc.
+                score += 30
+            elif resolution >= 720:   # 720p, 900p, etc.
+                score += 20
+            elif resolution >= 480:   # 480p, 576p, etc.
+                score += 10
+            else:  # Lower resolutions
+                score += 5
+
+        # Special case for 4K without 'p'
+        if '4k' in filename_lower:
+            score += 40
+
+        # File size bonus (larger files usually better quality)
+        try:
+            size_bytes = int(file_size)
+            # Add small bonus for larger files (1 point per GB)
+            size_gb = size_bytes / (1024 * 1024 * 1024)
+            score += min(size_gb, 10)  # Cap at 10 points
+        except (ValueError, TypeError):
+            pass
+
+        # Prefer certain release types
+        if 'bluray' in filename_lower or 'blu-ray' in filename_lower:
+            score += 15
+        elif 'web-dl' in filename_lower:
+            score += 10
+        elif 'webrip' in filename_lower:
+            score += 5
+
+        return score
+
+    def _perform_search(self, search_query, api_function, token):
+        """Perform the actual search using the provided API function with pagination."""
+        results = []
+        limit = 100
+        max_results = 300  # Limit total results to avoid excessive API calls
+
+        for offset in range(0, max_results, limit):
+            response = api_function('search', {
+                'what': search_query,
+                'category': 'video',
+                'sort': 'recent',
+                'limit': limit,
+                'offset': offset,
+                'wst': token,
+                'maybe_removed': 'true'
+            })
+
+            try:
+                xml = ET.fromstring(response.content)
+            except ET.ParseError as e:
+                xbmc.log(f'YaWSP BaseManager: XML Parse Error for query "{search_query}": {str(e)}', level=xbmc.LOGERROR)
+                continue
+
+            status = xml.find('status')
+            if status is not None and status.text == 'OK':
+                page_results = []
+                for file in xml.iter('file'):
+                    item = {}
+                    for elem in file:
+                        item[elem.tag] = elem.text
+                    page_results.append(item)
+
+                results.extend(page_results)
+                if len(page_results) < limit:
+                    break
+            else:
+                break
+
+        return results
+
+    def _safe_filename(self, name):
+        """Convert a media title to a safe filename"""
+        safe = re.sub(r'[^\w\-_\. ]', '_', name)
+        return safe.lower().replace(' ', '_')
+
+    def _save_data(self, name, data):
+        """Save generic media data to the database."""
+        safe_name = self._safe_filename(name)
+        file_path = os.path.join(self.db_path, f"{safe_name}.json")
+        try:
+            with io.open(file_path, 'w', encoding='utf8') as file:
+                try:
+                    json_data = json.dumps(data, indent=2).decode('utf8')
+                except AttributeError:
+                    json_data = json.dumps(data, indent=2)
+                file.write(json_data)
+                file.close()
+        except Exception as e:
+            xbmc.log(f'YaWSP BaseManager: Error saving data: {str(e)}',
+                     level=xbmc.LOGERROR)
+
+    def load_data(self, name):
+        """Load generic media data from the database."""
+        safe_name = self._safe_filename(name)
+        file_path = os.path.join(self.db_path, f"{safe_name}.json")
+        if not os.path.exists(file_path):
+            return None
+        try:
+            with io.open(file_path, 'r', encoding='utf8') as file:
+                data = file.read()
+                file.close()
+                try:
+                    return json.loads(data, "utf-8")
+                except TypeError:
+                    return json.loads(data)
+        except Exception as e:
+            xbmc.log(f'YaWSP BaseManager: Error loading data: {str(e)}',
+                     level=xbmc.LOGERROR)
+            return None
+
+    def remove_item(self, name):
+        """Remove a media item from the database."""
+        safe_name = self._safe_filename(name)
+        file_path = os.path.join(self.db_path, f"{safe_name}.json")
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return True
+        except Exception as e:
+            xbmc.log(f'YaWSP BaseManager: Error removing data: {str(e)}',
+                     level=xbmc.LOGERROR)
+        return False
+
+
+class SeriesManager(BaseManager):
+    def __init__(self, addon, profile):
+        self.addon = addon
+        super().__init__(profile, 'series_db')
 
     def search_series(self, series_name, api_function, token):
         """Search for episodes of a series"""
@@ -210,106 +365,6 @@ class SeriesManager:
 
         return False
 
-    def _calculate_file_score(self, filename, file_size):
-        """Calculate preference score for a file based on language and quality indicators"""
-        score = 0
-        filename_lower = filename.lower()
-        
-        # Czech language indicators (highest priority)
-        czech_indicators = ['cz', 'czech', 'čeština', 'dabing', 'titulky', 'cztit', 'cestina']
-        for indicator in czech_indicators:
-            if indicator in filename_lower:
-                score += 100
-                break  # Only count once
-        
-        # Quality indicators - extract resolution number
-        resolution_match = _RESOLUTION_RE.search(filename_lower)
-        if resolution_match:
-            resolution = int(resolution_match.group(1))
-            # Score based on resolution height
-            if resolution >= 2160:  # 4K and above
-                score += 40
-            elif resolution >= 1440:  # 1440p, 1600p, etc.
-                score += 35
-            elif resolution >= 1080:  # 1080p, 1200p, etc.
-                score += 30
-            elif resolution >= 720:   # 720p, 900p, etc.
-                score += 20
-            elif resolution >= 480:   # 480p, 576p, etc.
-                score += 10
-            else:  # Lower resolutions
-                score += 5
-        
-        # Special case for 4K without 'p'
-        if '4k' in filename_lower:
-            score += 40
-        
-        # File size bonus (larger files usually better quality)
-        try:
-            size_bytes = int(file_size)
-            # Add small bonus for larger files (1 point per GB)
-            size_gb = size_bytes / (1024 * 1024 * 1024)
-            score += min(size_gb, 10)  # Cap at 10 points
-        except (ValueError, TypeError):
-            pass
-        
-        # Prefer certain release types
-        if 'bluray' in filename_lower or 'blu-ray' in filename_lower:
-            score += 15
-        elif 'web-dl' in filename_lower:
-            score += 10
-        elif 'webrip' in filename_lower:
-            score += 5
-        
-        return score
-
-    def _perform_search(self, search_query, api_function, token):
-        """Perform the actual search using the provided API function with pagination"""
-        results = []
-        limit = 100
-        max_results = 300  # Limit total results to avoid excessive API calls
-
-        for offset in range(0, max_results, limit):
-            # Call the Webshare API to search for the series
-            response = api_function('search', {
-                'what': search_query,
-                'category': 'video',
-                'sort': 'recent',
-                'limit': limit,
-                'offset': offset,
-                'wst': token,
-                'maybe_removed': 'true'
-            })
-
-            try:
-                xml = ET.fromstring(response.content)
-            except ET.ParseError as e:
-                xbmc.log(f'YaWSP Series Manager: XML Parse Error for query "{search_query}": {str(e)}', level=xbmc.LOGERROR)
-                xbmc.log(f'YaWSP Series Manager: Response content: {response.content[:200]}', level=xbmc.LOGERROR)
-                continue
-
-            # Check if the search was successful
-            status = xml.find('status')
-            if status is not None and status.text == 'OK':
-                page_results = []
-                # Convert XML to a list of dictionaries
-                for file in xml.iter('file'):
-                    item = {}
-                    for elem in file:
-                        item[elem.tag] = elem.text
-                    page_results.append(item)
-
-                # If we got fewer results than the limit, we've reached the end
-                if len(page_results) < limit:
-                    results.extend(page_results)
-                    break
-
-                results.extend(page_results)
-            else:
-                # API error or no more results
-                break
-
-        return results
 
     def _detect_episode_info(self, filename, series_name):
         """Try to detect season and episode numbers from filename"""
@@ -353,52 +408,23 @@ class SeriesManager:
 
     def _save_series_data(self, series_name, series_data):
         """Save series data to the database"""
-        safe_name = self._safe_filename(series_name)
-        file_path = os.path.join(self.series_db_path, f"{safe_name}.json")
-
-        try:
-            with io.open(file_path, 'w', encoding='utf8') as file:
-                try:
-                    data = json.dumps(series_data, indent=2).decode('utf8')
-                except AttributeError:
-                    data = json.dumps(series_data, indent=2)
-                file.write(data)
-                file.close()
-        except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error saving series data: {str(e)}', level=xbmc.LOGERROR)
+        self._save_data(series_name, series_data)
 
     def load_series_data(self, series_name):
         """Load series data from the database"""
-        safe_name = self._safe_filename(series_name)
-        file_path = os.path.join(self.series_db_path, f"{safe_name}.json")
-
-        if not os.path.exists(file_path):
-            return None
-
-        try:
-            with io.open(file_path, 'r', encoding='utf8') as file:
-                data = file.read()
-                file.close()
-                try:
-                    series_data = json.loads(data, "utf-8")
-                except TypeError:
-                    series_data = json.loads(data)
-                return series_data
-        except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error loading series data: {str(e)}', level=xbmc.LOGERROR)
-            return None
+        return self.load_data(series_name)
 
     def get_all_series(self):
         """Get a list of all saved series"""
         series_list = []
 
         try:
-            for filename in os.listdir(self.series_db_path):
+            for filename in os.listdir(self.db_path):
                 if filename.endswith('.json'):
                     series_name = os.path.splitext(filename)[0]
                     # Convert safe filename back to proper name (rough conversion)
                     proper_name = series_name.replace('_', ' ')
-                    file_path = os.path.join(self.series_db_path, filename)
+                    file_path = os.path.join(self.db_path, filename)
                     mtime = 0
                     try:
                         mtime = os.path.getmtime(file_path)
@@ -419,22 +445,7 @@ class SeriesManager:
 
     def remove_series(self, series_name):
         """Remove a series from the database"""
-        safe_name = self._safe_filename(series_name)
-        file_path = os.path.join(self.series_db_path, f"{safe_name}.json")
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                return True
-        except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error removing series: {str(e)}', level=xbmc.LOGERROR)
-        return False
-
-    def _safe_filename(self, name):
-        """Convert a series name to a safe filename"""
-        # Replace problematic characters
-        safe = re.sub(r'[^\w\-_\. ]', '_', name)
-        return safe.lower().replace(' ', '_')
-
+        return self.remove_item(series_name)
 
 # Utility functions for the UI layer
 def get_url(**kwargs):

@@ -19,6 +19,7 @@ cp addon.xml temp/$ZIP_FOLDER/
 cp main.py temp/$ZIP_FOLDER/
 cp md5crypt.py temp/$ZIP_FOLDER/
 cp series_manager.py temp/$ZIP_FOLDER/
+cp movie_manager.py temp/$ZIP_FOLDER/
 cp yawsp.py temp/$ZIP_FOLDER/
 mkdir -p temp/$ZIP_FOLDER/resources
 cp -r resources temp/$ZIP_FOLDER/

@@ -24,6 +24,7 @@ import zipfile
 import uuid
 import requests
 import series_manager
+import movie_manager
 
 try:
     from urllib import urlencode
@@ -691,11 +692,17 @@ def db(params):
 def menu():
     revalidate()
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name'))
+    
+    # Add Movies Manager menu item
+    listitem = xbmcgui.ListItem(label='Filmy')
+    listitem.setArt({'icon': 'DefaultMovies.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie'), listitem, True)    
+    
     # Add Series Manager menu item
     listitem = xbmcgui.ListItem(label='Serialy')
     listitem.setArt({'icon': 'DefaultTVShows.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
-
+    
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30201))
     listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='search'), listitem, True)
@@ -957,6 +964,276 @@ def series_popular(params):
     xbmcplugin.endOfDirectory(_handle)
 
 
+def movie_menu(params):
+    """Handle Movies functionality"""
+    updateListing = False
+    # Initialize MovieManager
+    mm = movie_manager.MovieManager(_addon, _profile)
+
+    if 'remove' in params:
+        mm.remove_item(params['remove'])
+        updateListing = True
+
+    # Create movie menu similar to series menu
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ Movies")
+
+    # Add "Search for new movie" option
+    listitem = xbmcgui.ListItem(label="Hledat novy film")
+    listitem.setArt({'icon': 'DefaultAddSource.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie_search'), listitem, True)
+
+    # Trending from Trakt
+    listitem = xbmcgui.ListItem(label="Trending movies")
+    listitem.setArt({'icon': 'DefaultRecentlyAddedMovies.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie_trending'), listitem, True)
+
+    # Popular from Trakt
+    listitem = xbmcgui.ListItem(label="Popular movies")
+    listitem.setArt({'icon': 'DefaultMovies.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie_popular'), listitem, True)
+
+    # List existing movies
+    try:
+        movie_list = []
+        for filename in os.listdir(mm.db_path):
+            if filename.endswith('.json'):
+                movie_name = os.path.splitext(filename)[0]
+                proper_name = movie_name.replace('_', ' ')
+                file_path = os.path.join(mm.db_path, filename)
+                mtime = 0
+                try:
+                    mtime = os.path.getmtime(file_path)
+                except Exception as e:
+                    xbmc.log(f'YaWSP Movie: Error accessing {filename}: {str(e)}', level=xbmc.LOGERROR)
+                movie_list.append({
+                    'name': proper_name,
+                    'filename': filename,
+                    'safe_name': movie_name,
+                    'mtime': mtime
+                })
+
+        movie_list.sort(key=lambda m: m.get('mtime', 0), reverse=True)
+    except Exception as e:
+        xbmc.log(f'YaWSP Movie: Error listing movies: {str(e)}', level=xbmc.LOGERROR)
+        movie_list = []
+
+    for movie in movie_list:
+        listitem = xbmcgui.ListItem(label=movie['name'])
+        listitem.setArt({'icon': 'DefaultVideo.png'})
+        commands = []
+        commands.append((_addon.getLocalizedString(30213),
+                         'Container.Update(' + get_url(action='movie', remove=movie['name']) + ')'))
+        listitem.addContextMenuItems(commands)
+        xbmcplugin.addDirectoryItem(_handle, get_url(action='movie_detail', movie_name=movie['name']), listitem, True)
+
+    xbmcplugin.endOfDirectory(_handle, updateListing=updateListing)
+
+
+def movie_search(params):
+    """Search for a movie"""
+    token = revalidate()
+
+    # Determine movie name
+    movie_name = params.get('movie_name')
+    if not movie_name:
+        movie_name = ask(None)
+    if not movie_name:
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
+
+    # Initialize MovieManager
+    mm = movie_manager.MovieManager(_addon, _profile)
+
+    # If movie already exists locally, play it without refreshing
+    if mm.load_movie_data(movie_name):
+        xbmc.executebuiltin(f'Container.Update({get_url(action="movie_detail", movie_name=movie_name)})')
+        return
+
+    # Show progress dialog
+    progress = xbmcgui.DialogProgress()
+    progress.create('YaWSP', f'Vyhledavam film {movie_name}...')
+
+    try:
+        # Search for the movie
+        movie_data = mm.search_movie(movie_name, api, token)
+
+        if not movie_data or not movie_data['file']:
+            progress.close()
+            popinfo('Nenalezen zadny film', icon=xbmcgui.NOTIFICATION_WARNING)
+            xbmcplugin.endOfDirectory(_handle, succeeded=False)
+            return
+
+        # Success
+        progress.close()
+        popinfo(f'Nalezen film: {movie_data["file"]["name"]}')
+
+        # Redirect to movie detail
+        xbmc.executebuiltin(f'Container.Update({get_url(action="movie_detail", movie_name=movie_name)})')
+
+    except Exception as e:
+        progress.close()
+        traceback.print_exc()
+        popinfo(f'Chyba: {str(e)}', icon=xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+
+
+def movie_detail(params):
+    """Show movie detail and play option"""
+    movie_name = params['movie_name']
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + movie_name)
+
+    # Initialize MovieManager
+    mm = movie_manager.MovieManager(_addon, _profile)
+
+    movie_data = mm.load_movie_data(movie_name)
+    if not movie_data:
+        xbmcgui.Dialog().notification('YaWSP', 'Data filmu nenalezena', xbmcgui.NOTIFICATION_WARNING)
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
+
+    # Add "Refresh movie" option
+    listitem = xbmcgui.ListItem(label="Aktualizovat film")
+    listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie_refresh', movie_name=movie_name), listitem, True)
+
+    # Show movie file if available
+    if movie_data['file']:
+        movie_file = movie_data['file']
+        movie_title = f"{movie_name} - {movie_file['name']}"
+
+        listitem = xbmcgui.ListItem(label=movie_title)
+        listitem.setArt({'icon': 'DefaultVideo.png'})
+        listitem.setProperty('IsPlayable', 'true')
+
+        # Generate URL for playing this movie
+        url = get_url(action='play', ident=movie_file['ident'], name=movie_file['name'])
+
+        xbmcplugin.addDirectoryItem(_handle, url, listitem, False)
+
+    xbmcplugin.endOfDirectory(_handle)
+
+
+def movie_refresh(params):
+    """Refresh movie data"""
+    token = revalidate()
+    movie_name = params['movie_name']
+
+    # Initialize MovieManager and perform search
+    mm = movie_manager.MovieManager(_addon, _profile)
+
+    # Show progress dialog
+    progress = xbmcgui.DialogProgress()
+    progress.create('YaWSP', f'Aktualizuji data pro film {movie_name}...')
+
+    try:
+        # Search for the movie
+        movie_data = mm.search_movie(movie_name, api, token)
+
+        if not movie_data or not movie_data['file']:
+            progress.close()
+            popinfo('Nenalezen zadny film', icon=xbmcgui.NOTIFICATION_WARNING)
+            xbmcplugin.endOfDirectory(_handle, succeeded=False)
+            return
+
+        # Success
+        progress.close()
+        popinfo(f'Aktualizovano: {movie_data["file"]["name"]}')
+
+        # Redirect to movie detail to refresh the view
+        xbmc.executebuiltin(f'Container.Update({get_url(action="movie_detail", movie_name=movie_name)})')
+
+    except Exception as e:
+        progress.close()
+        traceback.print_exc()
+        popinfo(f'Chyba: {str(e)}', icon=xbmcgui.NOTIFICATION_ERROR)
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+
+
+def movie_trending(params):
+    """List trending movies from Trakt with paging."""
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ Trending movies')
+
+    page = int(params.get('page', '1'))
+    limit = 20
+
+    data, headers = _trakt_request('movies/trending', {'limit': limit, 'page': page})
+
+    if page > 1:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_trending', page=page - 1),
+                                   listitem, True)
+
+    for item in data:
+        movie = item.get('movie', {})
+        title = movie.get('title')
+        if not title:
+            continue
+        watchers = item.get('watchers', 0)
+        label = f"{title} ({watchers} users)"
+        listitem = xbmcgui.ListItem(label=label)
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_search', movie_name=title),
+                                   listitem, True)
+
+    page_count = int(headers.get('X-Pagination-Page-Count', page))
+    if page < page_count:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_trending', page=page + 1),
+                                   listitem, True)
+
+    xbmcplugin.endOfDirectory(_handle)
+
+
+def movie_popular(params):
+    """List popular movies from Trakt with paging."""
+    xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ Popular movies')
+
+    page = int(params.get('page', '1'))
+    limit = 20
+
+    data, headers = _trakt_request('movies/popular', {'limit': limit, 'page': page})
+
+    if page > 1:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_popular', page=page - 1),
+                                   listitem, True)
+
+    for movie in data:
+        title = movie.get('title')
+        if not title:
+            continue
+        watchers = 0
+        ids = movie.get('ids', {})
+        slug = ids.get('slug') or ids.get('trakt')
+        if slug:
+            stats, _ = _trakt_request(f'movies/{slug}/stats')
+            if isinstance(stats, dict):
+                watchers = stats.get('watchers', 0)
+        label = f"{title} ({watchers} users)"
+        listitem = xbmcgui.ListItem(label=label)
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_search', movie_name=title),
+                                   listitem, True)
+
+    page_count = int(headers.get('X-Pagination-Page-Count', page))
+    if page < page_count:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
+        listitem.setArt({'icon': 'DefaultMovies.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='movie_popular', page=page + 1),
+                                   listitem, True)
+
+    xbmcplugin.endOfDirectory(_handle)
+
+
 def router(paramstring):
     params = dict(parse_qsl(paramstring))
     if params:
@@ -991,6 +1268,19 @@ def router(paramstring):
             series_season(params)
         elif params['action'] == 'series_refresh':
             series_refresh(params)
+        # Movie Manager actions
+        elif params['action'] == 'movie':
+            movie_menu(params)
+        elif params['action'] == 'movie_search':
+            movie_search(params)
+        elif params['action'] == 'movie_trending':
+            movie_trending(params)
+        elif params['action'] == 'movie_popular':
+            movie_popular(params)
+        elif params['action'] == 'movie_detail':
+            movie_detail(params)
+        elif params['action'] == 'movie_refresh':
+            movie_refresh(params)
         else:
             menu()
     else:
