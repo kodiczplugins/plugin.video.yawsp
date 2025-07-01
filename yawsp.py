@@ -844,11 +844,11 @@ def series_refresh(params):
 
 
 def _trakt_request(endpoint, params=None):
-    """Helper to call Trakt API."""
+    """Helper to call Trakt API. Returns JSON data and response headers."""
     client_id = _addon.getSetting('trakt_client_id')
     if not client_id:
         popinfo('Missing Trakt client id', icon=xbmcgui.NOTIFICATION_WARNING)
-        return []
+        return [], {}
 
     headers = {
         'Content-Type': 'application/json',
@@ -861,20 +861,32 @@ def _trakt_request(endpoint, params=None):
                                headers=headers,
                                params=params or {}, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            return response.json(), response.headers
         else:
             popinfo('Trakt API error', icon=xbmcgui.NOTIFICATION_WARNING)
     except Exception:
         traceback.print_exc()
         popinfo('Trakt API request failed', icon=xbmcgui.NOTIFICATION_WARNING)
-    return []
+    return [], {}
 
 
 def series_trending(params):
-    """List trending series from Trakt."""
+    """List trending series from Trakt with paging."""
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
                                 _addon.getLocalizedString(30401))
-    data = _trakt_request('shows/trending', {'limit': 20})
+
+    page = int(params.get('page', '1'))
+    limit = 20
+
+    data, headers = _trakt_request('shows/trending', {'limit': limit, 'page': page})
+
+    if page > 1:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_trending', page=page - 1),
+                                   listitem, True)
+
     for item in data:
         show = item.get('show', {})
         title = show.get('title')
@@ -887,23 +899,61 @@ def series_trending(params):
         xbmcplugin.addDirectoryItem(_handle,
                                    get_url(action='series_search', series_name=title),
                                    listitem, True)
+
+    page_count = int(headers.get('X-Pagination-Page-Count', page))
+    if page < page_count:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_trending', page=page + 1),
+                                   listitem, True)
+
     xbmcplugin.endOfDirectory(_handle)
 
 
 def series_popular(params):
-    """List popular series from Trakt."""
+    """List popular series from Trakt with paging."""
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
                                 _addon.getLocalizedString(30402))
-    data = _trakt_request('shows/popular', {'limit': 20})
+
+    page = int(params.get('page', '1'))
+    limit = 20
+
+    data, headers = _trakt_request('shows/popular', {'limit': limit, 'page': page})
+
+    if page > 1:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_popular', page=page - 1),
+                                   listitem, True)
+
     for show in data:
         title = show.get('title')
         if not title:
             continue
-        listitem = xbmcgui.ListItem(label=title)
+        watchers = 0
+        ids = show.get('ids', {})
+        slug = ids.get('slug') or ids.get('trakt')
+        if slug:
+            stats, _ = _trakt_request(f'shows/{slug}/stats')
+            if isinstance(stats, dict):
+                watchers = stats.get('watchers', 0)
+        label = f"{title} ({watchers} users)"
+        listitem = xbmcgui.ListItem(label=label)
         listitem.setArt({'icon': 'DefaultTVShows.png'})
         xbmcplugin.addDirectoryItem(_handle,
                                    get_url(action='series_search', series_name=title),
                                    listitem, True)
+
+    page_count = int(headers.get('X-Pagination-Page-Count', page))
+    if page < page_count:
+        listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
+        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        xbmcplugin.addDirectoryItem(_handle,
+                                   get_url(action='series_popular', page=page + 1),
+                                   listitem, True)
+
     xbmcplugin.endOfDirectory(_handle)
 
 
