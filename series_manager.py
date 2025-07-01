@@ -39,6 +39,15 @@ EPISODE_PATTERNS = [
 _NORMALIZE_RE = re.compile(r'[\W_]+')
 _RESOLUTION_RE = re.compile(r'(\d+)p')
 
+# Additional precompiled regex patterns for performance
+_SAFE_FILENAME_RE = re.compile(r'[^\w\-_\. ]')
+_SEASON_MATCH_RE = re.compile(r'season\s*(\d+)')
+_EPISODE_EXTRACT_RE = re.compile(r'(\d+)')
+_WHITESPACE_RE = re.compile(r'\s+')
+
+# Cache for compiled word boundary patterns to avoid recompiling same patterns
+_WORD_BOUNDARY_CACHE = {}
+
 
 def _normalize(text):
     """Normalize text for comparisons."""
@@ -58,9 +67,13 @@ def _is_series_match(filename, series_name):
 
     # If series name is a single word, check if it appears as a word boundary
     if len(series_words) == 1:
-        # Use word boundary matching to avoid partial matches
-        pattern = r'\b' + re.escape(series_words[0]) + r'\b'
-        return bool(re.search(pattern, norm_fn))
+        # Use cached word boundary pattern for performance
+        word = series_words[0]
+        if word not in _WORD_BOUNDARY_CACHE:
+            escaped_word = re.escape(word)
+            _WORD_BOUNDARY_CACHE[word] = re.compile(r'\b' + escaped_word + r'\b')
+        pattern = _WORD_BOUNDARY_CACHE[word]
+        return bool(pattern.search(norm_fn))
 
     # For multi-word series names, check if all words appear in order
     # This allows for some flexibility in separators
@@ -186,7 +199,7 @@ class BaseManager:
 
     def _safe_filename(self, name):
         """Convert a media title to a safe filename"""
-        safe = re.sub(r'[^\w\-_\. ]', '_', name)
+        safe = _SAFE_FILENAME_RE.sub('_', name)
         return safe.lower().replace(' ', '_')
 
     def _save_data(self, name, data):
@@ -376,10 +389,13 @@ class SeriesManager(BaseManager):
         cleaned = norm_fn
         series_words = norm_sn.split()
         for word in series_words:
-            # Remove each word of the series name with word boundaries
-            pattern = r'\b' + re.escape(word) + r'\b'
-            cleaned = re.sub(pattern, '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            # Use cached word boundary pattern for better performance
+            if word not in _WORD_BOUNDARY_CACHE:
+                escaped_word = re.escape(word)
+                _WORD_BOUNDARY_CACHE[word] = re.compile(r'\b' + escaped_word + r'\b')
+            pattern = _WORD_BOUNDARY_CACHE[word]
+            cleaned = pattern.sub('', cleaned)
+        cleaned = _WHITESPACE_RE.sub(' ', cleaned).strip()
 
         # Try each of our patterns
         for pattern in EPISODE_PATTERNS:
@@ -395,11 +411,11 @@ class SeriesManager(BaseManager):
         # If no match found, try to infer from the filename
         if 'season' in cleaned or 'serie' in cleaned:
             # Try to find season number
-            season_match = re.search(r'season\s*(\d+)', cleaned)
+            season_match = _SEASON_MATCH_RE.search(cleaned)
             if season_match:
                 season_num = int(season_match.group(1))
                 # Try to find episode number
-                ep_match = re.search(r'(\d+)', cleaned.replace(season_match.group(0), ''))
+                ep_match = _EPISODE_EXTRACT_RE.search(cleaned.replace(season_match.group(0), ''))
                 if ep_match:
                     return season_num, int(ep_match.group(1))
 

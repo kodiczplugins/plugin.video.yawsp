@@ -26,6 +26,9 @@ import requests
 import series_manager
 import movie_manager
 
+# Precompiled regex patterns for performance
+_DIGITS_ONLY_RE = re.compile(r'[^\d]+')
+
 try:
     from urllib import urlencode
     from urlparse import parse_qsl, urlparse
@@ -585,7 +588,7 @@ def download(params):
     notify = 'true' == _addon.getSetting('dnotify')
     every = _addon.getSetting('dnevery')
     try:
-        every = int(re.sub(r'[^\d]+', '', every))
+        every = int(_DIGITS_ONLY_RE.sub('', every))
     except:
         every = 10
 
