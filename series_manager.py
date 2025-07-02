@@ -84,6 +84,39 @@ def _is_series_match(filename, series_name):
     return True
 
 
+def _calculate_series_match_score(filename, series_name):
+    """Calculate a match score for prioritizing exact title matches."""
+    norm_fn = _normalize(filename)
+    norm_sn = _normalize(series_name)
+    
+    # Check if filename starts with the series name (highest priority)
+    if norm_fn.startswith(norm_sn):
+        return 100
+    
+    # Check if series name appears at word boundary near beginning
+    # Pattern: "Series Name S01E01" or "Series.Name.S01E01"
+    series_at_start_pattern = r'^\W*' + re.escape(norm_sn) + r'[\s\.\-_]'
+    if re.search(series_at_start_pattern, norm_fn):
+        return 90
+    
+    # Check if it's the exact series name with common separators
+    exact_patterns = [
+        r'\b' + re.escape(norm_sn) + r'\b[\s\.\-_]*s\d+',  # "silo s01"
+        r'\b' + re.escape(norm_sn) + r'\b[\s\.\-_]*season',  # "silo season"
+        r'\b' + re.escape(norm_sn) + r'\b[\s\.\-_]*\d{4}',  # "silo 2023"
+    ]
+    
+    for pattern in exact_patterns:
+        if re.search(pattern, norm_fn, re.IGNORECASE):
+            return 80
+    
+    # Basic word boundary match (current behavior)
+    if _is_series_match(filename, series_name):
+        return 50
+    
+    return 0
+
+
 class BaseManager:
     """Base manager providing common utilities for Series and Movies."""
 
@@ -110,7 +143,7 @@ class BaseManager:
         filename_lower = filename.lower()
 
         # Czech language indicators (highest priority)
-        czech_indicators = ['cz', 'czech', 'čeština', 'dabing', 'titulky', 'cztit', 'cestina']
+        czech_indicators = ['cz', 'czech', 'čeština', 'dabing', 'titulky', 'tit', 'cztit', 'cestina']
         for indicator in czech_indicators:
             if indicator in filename_lower:
                 score += 100
@@ -197,6 +230,43 @@ class BaseManager:
 
         return results
 
+    def _base_variations(self, name):
+        """Return common variations of a name for search queries."""
+        variations = {name}
+        if ' ' in name:
+            variations.update({
+                name.replace(' ', '.'),
+                name.replace(' ', '-'),
+                name.replace(' ', '_')
+            })
+        return variations
+
+    def _build_search_queries(self, name, seasons=None, extras=None):
+        """Construct a list of search queries for the given media name.
+
+        Extras allow additional queries like language or quality variants.
+        Passing no extras keeps searches minimal and relies on filtering.
+        """
+        seasons = seasons or []
+        extras = extras or []
+        queries = []
+
+        for base in self._base_variations(name):
+            queries.append(base)
+            for season in seasons:
+                queries.append(f"{base} s{int(season):02d}")
+
+        for extra in extras:
+            queries.append(f"{name} {extra}")
+
+        seen = set()
+        unique = []
+        for q in queries:
+            if q not in seen:
+                unique.append(q)
+                seen.add(q)
+        return unique
+
     def _safe_filename(self, name):
         """Convert a media title to a safe filename"""
         safe = _SAFE_FILENAME_RE.sub('_', name)
@@ -265,58 +335,34 @@ class SeriesManager(BaseManager):
             'seasons': {}
         }
 
-        # Define search queries to try - prioritize season-specific searches
-        search_queries = [
-            f"{series_name} s01",  # name + s01 (most reliable)
-            f"{series_name} s02",  # name + s02
-            f"{series_name} s03",  # name + s03
-            f"{series_name} s04",  # name + s04
-            f"{series_name} s05",  # name + s05
-            series_name,  # exact name (fallback)
-            f"{series_name} season",  # name + season
-            f"{series_name} episode",  # name + episode
-            f"{series_name} 1080p",  # name + quality
-            f"{series_name} 720p",  # name + quality
-            f"{series_name} 2160p",  # name + 4K quality
-            f"{series_name} webrip",  # name + release type
-            f"{series_name} bluray",  # name + release type
-            f"{series_name} web-dl",  # name + release type
-        ]
-
-        # Add variations where spaces are replaced with common separators
-        base_variations = [series_name]
-        if ' ' in series_name:
-            base_variations.extend([
-                series_name.replace(' ', '.'),
-                series_name.replace(' ', '-'),
-                series_name.replace(' ', '')
-            ])
-
-        # For each base variation, add season-specific searches
-        for base in base_variations:
-            if base != series_name:  # Don't duplicate the exact name
-                search_queries.append(base)
-            search_queries.extend([
-                f"{base} s01",
-                f"{base} s02",
-                f"{base} s03",
-                f"{base}.s01",
-                f"{base}.s02",
-                f"{base}.s03",
-                f"{base}-s01",
-                f"{base}-s02",
-                f"{base}-s03"
-            ])
+        search_queries = self._build_search_queries(
+            series_name,
+            seasons=range(1, 6)
+        )
 
         all_results = []
 
         # Try each search query
         for query in search_queries:
             results = self._perform_search(query, api_function, token)
-            # Add results to our collection, avoiding duplicates
+            # Add results to our collection, avoiding duplicates and prioritizing exact matches
             for result in results:
-                if result not in all_results and self._is_likely_episode(result['name'], series_name):
-                    all_results.append(result)
+                if result not in all_results:
+                    # Calculate match score to prioritize exact title matches
+                    match_score = _calculate_series_match_score(result['name'], series_name)
+                    if match_score > 0:  # Only include if there's a match
+                        season_num, episode_num = self._detect_episode_info(result['name'], series_name)
+                        if season_num is not None:
+                            # Add match score to result for sorting
+                            result['_match_score'] = match_score
+                            all_results.append(result)
+
+        # Sort results by match score (highest first) to prioritize exact matches
+        all_results.sort(key=lambda x: x.get('_match_score', 0), reverse=True)
+        
+        # Limit results to reduce noise - keep top 200 highest scoring matches
+        if len(all_results) > 200:
+            all_results = all_results[:200]
 
         # Process results and organize into seasons with quality/language preference
         for item in all_results:
@@ -358,25 +404,16 @@ class SeriesManager(BaseManager):
 
     def _is_likely_episode(self, filename, series_name):
         """Check if a filename is likely to be an episode of the series"""
-        # Use the new flexible series matching
         if not _is_series_match(filename, series_name):
             return False
 
+        season_num, episode_num = self._detect_episode_info(filename, series_name)
+        if season_num is not None:
+            return True
+
         norm_fn = _normalize(filename)
-
-        # Positive indicators
-        for pattern in EPISODE_PATTERNS:
-            if pattern.search(norm_fn):
-                return True
-
-        # Keywords that suggest it's a episode
         episode_keywords = ['episode', 'season', 'series', 'ep', 'complete', 'serie', 'disk']
-
-        for keyword in episode_keywords:
-            if keyword in norm_fn:
-                return True
-
-        return False
+        return any(keyword in norm_fn for keyword in episode_keywords)
 
 
     def _detect_episode_info(self, filename, series_name):

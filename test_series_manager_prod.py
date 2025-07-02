@@ -204,7 +204,7 @@ def test_quality_selection():
     print("   ✅ Resolution scoring works correctly")
     
     print("\n3. Testing Czech indicators:")
-    czech_indicators = ['cz', 'czech', 'dabing', 'titulky', 'cztit']
+    czech_indicators = ['cz', 'czech', 'dabing', 'titulky', 'cztit', 'tit']
     for indicator in czech_indicators:
         filename = f"Series.S01E01.1080p.{indicator}.mkv"
         score = sm._calculate_file_score(filename, "1000000000")
@@ -215,7 +215,7 @@ def test_quality_selection():
     bluray_score = sm._calculate_file_score("Series.S01E01.1080p.BluRay.mkv", "2000000000")
     webdl_score = sm._calculate_file_score("Series.S01E01.1080p.WEB-DL.mkv", "2000000000")
     webrip_score = sm._calculate_file_score("Series.S01E01.1080p.WEBRip.mkv", "2000000000")
-    
+
     print(f"   BluRay: {bluray_score} points")
     print(f"   WEB-DL: {webdl_score} points") 
     print(f"   WEBRip: {webrip_score} points")

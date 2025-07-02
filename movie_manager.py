@@ -33,16 +33,7 @@ class MovieManager(BaseManager):
 
     def search_movie(self, movie_name, api_function, token):
         """Search for a movie and return the best available file."""
-        search_queries = [
-            movie_name,
-            f"{movie_name} cz",
-            f"{movie_name} 1080p",
-            f"{movie_name} 720p"
-        ]
-
-        if ' ' in movie_name:
-            search_queries.append(movie_name.replace(' ', '.'))
-            search_queries.append(movie_name.replace(' ', '-'))
+        search_queries = self._build_search_queries(movie_name)
 
         all_results = []
         for query in search_queries:

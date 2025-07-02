@@ -25,6 +25,9 @@ import requests
 import hashlib
 from md5crypt import md5crypt
 
+# Import mock modules before importing series_manager
+import mock_xbmc
+
 # Production API settings (copied from yawsp.py)
 BASE = 'https://webshare.cz'
 API = BASE + '/api/'
@@ -36,84 +39,20 @@ REALM = ':Webshare:'
 _session = requests.Session()
 _session.headers.update(HEADERS)
 
-# Copy the business logic functions from series_manager.py
-def _normalize(text):
-    """Normalize text for comparisons."""
-    # Replace non-word characters (including underscore) with spaces and
-    # convert to lower case for easier matching.
-    return re.sub(r'[\W_]+', ' ', text).strip().lower()
+# Import business logic functions from production code
+from series_manager import (
+    _normalize, 
+    _is_series_match, 
+    _calculate_series_match_score,
+    SeriesManager
+)
 
-def _is_series_match(filename, series_name):
-    """Check if filename contains the series name with flexible matching."""
-    norm_fn = _normalize(filename)
-    norm_sn = _normalize(series_name)
-    
-    # Split series name into words for flexible matching
-    series_words = norm_sn.split()
-    
-    # If series name is a single word, check if it appears as a word boundary
-    if len(series_words) == 1:
-        # Use word boundary matching to avoid partial matches
-        pattern = r'\b' + re.escape(series_words[0]) + r'\b'
-        return bool(re.search(pattern, norm_fn))
-    
-    # For multi-word series names, check if all words appear in order
-    # This allows for some flexibility in separators
-    for word in series_words:
-        if word not in norm_fn:
-            return False
-    
-    return True
-
+# Import _detect_episode_info - need to access it from SeriesManager instance
 def _detect_episode_info(filename, series_name):
-    """Try to detect season and episode numbers from filename"""
-    # Regular expressions for detecting episode patterns
-    EPISODE_PATTERNS = [
-        r'[Ss](\d+)[Ee](\d+)',  # S01E01 format
-        r'(\d+)x(\d+)',         # 1x01 format
-        r'[Ee]pisode\s*(\d+)',  # Episode 1 format
-        r'[Ee]p\s*(\d+)',       # Ep 1 format
-        r'[Ee](\d+)',           # E1 format
-        r'(\d+)\.\s*(\d+)'      # 1.01 format
-    ]
-    
-    # Normalize filename and series name for easier matching
-    norm_fn = _normalize(filename)
-    norm_sn = _normalize(series_name)
-
-    # Remove the series name from the filename more intelligently
-    cleaned = norm_fn
-    series_words = norm_sn.split()
-    for word in series_words:
-        # Remove each word of the series name with word boundaries
-        pattern = r'\b' + re.escape(word) + r'\b'
-        cleaned = re.sub(pattern, '', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    
-    # Try each of our patterns
-    for pattern in EPISODE_PATTERNS:
-        match = re.search(pattern, cleaned)
-        if match:
-            groups = match.groups()
-            if len(groups) == 2:  # Patterns like S01E02
-                return int(groups[0]), int(groups[1])
-            elif len(groups) == 1:  # Patterns like Episode 5
-                # Assume season 1 if only episode number is found
-                return 1, int(groups[0])
-    
-    # If no match found, try to infer from the filename
-    if 'season' in cleaned or 'serie' in cleaned:
-        # Try to find season number
-        season_match = re.search(r'season\s*(\d+)', cleaned)
-        if season_match:
-            season_num = int(season_match.group(1))
-            # Try to find episode number
-            ep_match = re.search(r'(\d+)', cleaned.replace(season_match.group(0), ''))
-            if ep_match:
-                return season_num, int(ep_match.group(1))
-    
-    # Default fallback
-    return None, None
+    """Wrapper to access _detect_episode_info from SeriesManager"""
+    # Create a temporary instance to access the method
+    temp_manager = SeriesManager(None, '.')
+    return temp_manager._detect_episode_info(filename, series_name)
 
 def api(fnct, data):
     """Production API function (copied from yawsp.py)"""
@@ -172,6 +111,71 @@ def login_to_webshare():
         print(f"Login failed: {error_msg}")
         return None
 
+def test_improved_scoring():
+    """Test the new improved scoring system"""
+    print("=== Testing Improved Scoring Logic ===")
+    
+    # Test Silo series matching
+    series_name = "Silo"
+    
+    test_cases = [
+        # High priority matches (should get highest scores)
+        ("Silo.S01E01.720p.WEB-DL.x264", 100),  # Starts with series name
+        ("Silo S01E01 1080p BluRay x264", 90),    # Series at start with separator
+        ("Silo.2023.S01E01.WEB-DL", 80),         # Exact match with year
+        ("Silo Season 1 Episode 1", 80),          # Exact match with season
+        ("Silo.s01.Complete.720p", 80),           # Exact match with season
+        
+        # Medium priority matches
+        ("The.Silo.S01E01.720p", 50),            # Contains as word boundary
+        ("Movie.About.Silo.Building.S01E01", 50), # Contains as word boundary
+        
+        # Should NOT match (score 0)
+        ("Missile.Silo.Documentary", 0),          # No season/episode info
+        ("Grain.Silos.of.America", 0),           # Different word (silos vs silo)
+        ("Prison.Isolation.Ward", 0),             # No match at all
+    ]
+    
+    print(f"Testing improved scoring for: '{series_name}'")
+    print("-" * 60)
+    
+    for filename, expected_min_score in test_cases:
+        score = _calculate_series_match_score(filename, series_name)
+        season, episode = _detect_episode_info(filename, series_name)
+        
+        status = "✓" if score >= expected_min_score else "✗"
+        has_episode = "E" if season is not None else "-"
+        
+        print(f"{status} {has_episode} Score:{score:3d} | {filename}")
+        if score >= expected_min_score and season is not None:
+            print(f"         -> S{season:02d}E{episode:02d}")
+        elif score < expected_min_score:
+            print(f"         -> Expected >={expected_min_score}, got {score}")
+    
+    print(f"\nHigh-scoring matches (>=80) will appear first in search results")
+    
+    # Test multi-word series
+    print(f"\nTesting multi-word series: 'Breaking Bad'")
+    print("-" * 60)
+    
+    multi_word_cases = [
+        ("Breaking.Bad.S01E01.720p", 100),
+        ("Breaking Bad S01E01", 90),
+        ("Breaking.Bad.2008.S01E01", 80),
+        ("The.Breaking.Bad.S01E01", 50),
+    ]
+    
+    for filename, expected_min_score in multi_word_cases:
+        score = _calculate_series_match_score(filename, "Breaking Bad")
+        season, episode = _detect_episode_info(filename, "Breaking Bad")
+        
+        status = "✓" if score >= expected_min_score else "✗"
+        has_episode = "E" if season is not None else "-"
+        
+        print(f"{status} {has_episode} Score:{score:3d} | {filename}")
+        if season is not None:
+            print(f"         -> S{season:02d}E{episode:02d}")
+
 def test_local_matching():
     """Test the matching logic locally first"""
     print("=== Testing Local Matching Logic ===")
@@ -183,38 +187,46 @@ def test_local_matching():
         "silo-s02e01-2024-1080p-cz-titulky-mkv",
         # Add more silo test cases here as you find them
     ]
+
+    # Additional test files for Simpsonovi
+    simpsonovi_test_files = [
+        "Simpsonovi s01e01 - Vánoce u Simpsonových.mkv",
+        "Simpsonovi.S05E12.Bart.Gets.Famous.DVDRip.XviD.mkv",
+        "The.Simpsons.S34E01.1080p.WEB.H264-CAKES.mkv",
+        "Simpsonovi.S12E08.Skinner's.Sense.of.Snow.mkv"
+    ]
     
-    series_name = "silo"
-    
-    print(f"Testing series matching for: '{series_name}'")
-    print("-" * 50)
-    
-    matches = []
-    for filename in silo_test_files:
-        is_match = _is_series_match(filename, series_name)
-        season, episode = _detect_episode_info(filename, series_name)
-        
-        print(f"{'✓' if is_match else '✗'} {filename}")
-        if is_match:
-            print(f"    Season: {season}, Episode: {episode}")
-            matches.append({
-                'filename': filename,
-                'season': season,
-                'episode': episode
-            })
-        else:
-            print(f"    ❌ Failed to match - this should be investigated!")
-    
-    print(f"\nFound {len(matches)} matches for '{series_name}'")
+    all_matches = {}
+    for series_name, files in [("silo", silo_test_files), ("Simpsonovi", simpsonovi_test_files)]:
+        print(f"Testing series matching for: '{series_name}'")
+        print("-" * 50)
+        matches = []
+        for filename in files:
+            is_match = _is_series_match(filename, series_name)
+            season, episode = _detect_episode_info(filename, series_name)
+
+            print(f"{'✓' if is_match else '✗'} {filename}")
+            if is_match:
+                print(f"    Season: {season}, Episode: {episode}")
+                matches.append({
+                    'filename': filename,
+                    'season': season,
+                    'episode': episode
+                })
+            else:
+                print(f"    ❌ Failed to match - this should be investigated!")
+
+        print(f"\nFound {len(matches)} matches for '{series_name}'")
+        all_matches[series_name] = matches
     
     # Test normalization to see what's happening
     print(f"\nNormalization examples:")
-    for filename in silo_test_files[:2]:  # Show first 2
+    for filename in silo_test_files[:2] + simpsonovi_test_files[:2]:  # Show examples
         normalized = _normalize(filename)
         print(f"  '{filename}'")
         print(f"  -> '{normalized}'")
     
-    return matches
+    return all_matches
 
 def search_webshare(token, query, limit=50):
     """Search Webshare for a specific query using production API"""
@@ -257,78 +269,102 @@ def test_webshare_search(token):
     """Test different search queries against Webshare"""
     print("\n=== Testing Webshare Search ===")
     
-    queries = [
-        "silo",
-        "silo s01",
-        "silo s02", 
-        "silo-s01",
-        "silo-s02",
-        "silo 2024"
-    ]
+    # Test queries for both series
+    series_queries = {
+        'silo': [
+            "silo",
+            "silo s01",
+            "silo s02", 
+            "silo-s01",
+            "silo-s02",
+            "silo 2024"
+        ],
+        'Simpsonovi': [
+            "simpsonovi",
+            "simpsonovi s01",
+            "simpsons",
+            "the simpsons"
+        ]
+    }
     
     all_results = {}
     
-    for query in queries:
-        results = search_webshare(token, query)
+    for series_name, queries in series_queries.items():
+        print(f"\n--- Testing {series_name} ---")
+        series_results = {}
         
-        # Filter for silo matches
-        silo_matches = []
-        for result in results:
-            filename = result.get('name', '')
-            if _is_series_match(filename, 'silo'):
-                season, episode = _detect_episode_info(filename, 'silo')
-                silo_matches.append({
-                    'filename': filename,
-                    'season': season,
-                    'episode': episode,
-                    'ident': result.get('ident', ''),
-                    'size': result.get('size', '')
-                })
+        for query in queries:
+            results = search_webshare(token, query)
+            
+            # Filter for series matches
+            series_matches = []
+            for result in results:
+                filename = result.get('name', '')
+                if _is_series_match(filename, series_name):
+                    season, episode = _detect_episode_info(filename, series_name)
+                    series_matches.append({
+                        'filename': filename,
+                        'season': season,
+                        'episode': episode,
+                        'ident': result.get('ident', ''),
+                        'size': result.get('size', '')
+                    })
+            
+            series_results[query] = series_matches
+            print(f"  '{query}': {len(series_matches)} {series_name} matches")
+            
+            # Show first few matches
+            for i, match in enumerate(series_matches[:3]):
+                if match['season'] is not None and match['episode'] is not None:
+                    print(f"    {i+1}. S{match['season']:02d}E{match['episode']:02d} - {match['filename']}")
         
-        all_results[query] = silo_matches
-        print(f"  '{query}': {len(silo_matches)} silo matches")
-        
-        # Show first few matches
-        for i, match in enumerate(silo_matches[:3]):
-            print(f"    {i+1}. S{match['season']:02d}E{match['episode']:02d} - {match['filename']}")
+        all_results[series_name] = series_results
     
     return all_results
 
 def organize_by_season(all_matches):
-    """Organize all matches by season"""
-    seasons = {}
+    """Organize all matches by season for each series"""
+    organized = {}
     
-    for query, matches in all_matches.items():
-        for match in matches:
-            season = match['season']
-            episode = match['episode']
-            
-            if season is None or episode is None:
-                continue
+    for series_name, series_data in all_matches.items():
+        seasons = {}
+        
+        for query, matches in series_data.items():
+            for match in matches:
+                season = match['season']
+                episode = match['episode']
                 
-            season_str = str(season)
-            episode_str = str(episode)
-            
-            if season_str not in seasons:
-                seasons[season_str] = {}
-            
-            # Keep the best quality version (prefer higher resolution)
-            if episode_str not in seasons[season_str]:
-                seasons[season_str][episode_str] = match
-            else:
-                # Simple quality preference: 2160p > 1080p > 720p
-                current = seasons[season_str][episode_str]['filename']
-                new = match['filename']
+                if season is None or episode is None:
+                    continue
+                    
+                season_str = str(season)
+                episode_str = str(episode)
                 
-                if '2160p' in new and '2160p' not in current:
+                if season_str not in seasons:
+                    seasons[season_str] = {}
+                
+                # Keep the best quality version (prefer higher resolution)
+                if episode_str not in seasons[season_str]:
                     seasons[season_str][episode_str] = match
-                elif '1080p' in new and '720p' in current:
-                    seasons[season_str][episode_str] = match
+                else:
+                    # Simple quality preference: 2160p > 1080p > 720p
+                    current = seasons[season_str][episode_str]['filename']
+                    new = match['filename']
+                    
+                    if '2160p' in new and '2160p' not in current:
+                        seasons[season_str][episode_str] = match
+                    elif '1080p' in new and '720p' in current:
+                        seasons[season_str][episode_str] = match
+        
+        organized[series_name] = seasons
     
-    return seasons
+    return organized
 
 def main():
     print("=== Webshare Search Logic Test ===")
+    
+    # Test the improved scoring system first
+    test_improved_scoring()
     
     # Test local matching first
     local_matches = test_local_matching()
@@ -344,21 +380,22 @@ def main():
     
     # Organize results by season
     print("\n=== Organizing Results by Season ===")
-    seasons = organize_by_season(webshare_results)
+    organized_seasons = organize_by_season(webshare_results)
     
-    print(f"Found {len(seasons)} seasons:")
-    for season_num in sorted(seasons.keys(), key=int):
-        episodes = seasons[season_num]
-        print(f"  Season {season_num}: {len(episodes)} episodes")
-        for ep_num in sorted(episodes.keys(), key=int):
-            episode = episodes[ep_num]
-            print(f"    Episode {ep_num}: {episode['filename']}")
+    for series_name, seasons in organized_seasons.items():
+        print(f"\n{series_name}: {len(seasons)} seasons found")
+        for season_num in sorted(seasons.keys(), key=int):
+            episodes = seasons[season_num]
+            print(f"  Season {season_num}: {len(episodes)} episodes")
+            for ep_num in sorted(episodes.keys(), key=int):
+                episode = episodes[ep_num]
+                print(f"    Episode {ep_num}: {episode['filename']}")
     
     # Save results
     results = {
         'local_test_matches': local_matches,
         'webshare_query_results': webshare_results,
-        'organized_seasons': seasons
+        'organized_seasons': organized_seasons
     }
     
     with open('search_test_results.json', 'w', encoding='utf-8') as f:
@@ -368,10 +405,18 @@ def main():
     
     # Summary
     print("\n=== SUMMARY ===")
-    print(f"Local test matches: {len(local_matches)}")
-    for query, matches in webshare_results.items():
-        print(f"'{query}' API results: {len(matches)} matches")
-    print(f"Final organized seasons: {len(seasons)}")
+    for series_name, matches in local_matches.items():
+        print(f"Local {series_name} matches: {len(matches)}")
+    
+    for series_name, series_data in webshare_results.items():
+        total_matches = sum(len(matches) for matches in series_data.values())
+        print(f"API {series_name} matches: {total_matches}")
+        for query, matches in series_data.items():
+            print(f"  '{query}': {len(matches)} matches")
+    
+    for series_name, seasons in organized_seasons.items():
+        total_episodes = sum(len(episodes) for episodes in seasons.values())
+        print(f"Final {series_name} organized: {len(seasons)} seasons, {total_episodes} episodes")
 
 if __name__ == "__main__":
     main()
