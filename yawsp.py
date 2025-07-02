@@ -695,17 +695,17 @@ def db(params):
 def menu():
     revalidate()
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name'))
-    
+
     # Add Movies Manager menu item
     listitem = xbmcgui.ListItem(label='Filmy')
     listitem.setArt({'icon': 'DefaultMovies.png'})
-    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie'), listitem, True)    
-    
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='movie'), listitem, True)
+
     # Add Series Manager menu item
     listitem = xbmcgui.ListItem(label='Serialy')
     listitem.setArt({'icon': 'DefaultTVShows.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
-    
+
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30201))
     listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='search'), listitem, True)
@@ -796,11 +796,47 @@ def series_detail(params):
     """Show seasons for a series"""
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + params['series_name'])
 
-    # Initialize SeriesManager
+    series_name = params['series_name']
     sm = series_manager.SeriesManager(_addon, _profile)
+    series_data = sm.load_series_data(series_name)
+    if not series_data:
+        xbmcgui.Dialog().notification('YaWSP', 'Data serialu nenalezena', xbmcgui.NOTIFICATION_WARNING)
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
 
-    # Display seasons menu
-    series_manager.create_seasons_menu(sm, _handle, params['series_name'])
+    # Add refresh option
+    listitem = xbmcgui.ListItem(label='Aktualizovat serial')
+    listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='series_refresh', series_name=series_name), listitem, True)
+
+    show_info = _trakt_show_info(series_name)
+    poster = None
+    plot = ''
+    rating = None
+    if show_info:
+        img = show_info.get('images', {}).get('poster')
+        poster = img[0] if isinstance(img, list) and img else None
+        if poster and not poster.startswith('http'):
+            poster = 'https://' + poster
+        plot = show_info.get('overview') or ''
+        rating = show_info.get('rating')
+
+    for season_num in sorted(series_data['seasons'].keys(), key=int):
+        season_name = f'Rada {season_num}'
+        listitem = xbmcgui.ListItem(label=season_name)
+        art = {'icon': 'DefaultFolder.png'}
+        if poster:
+            art['thumb'] = poster
+        listitem.setArt(art)
+        info = {'title': f'{series_name} - {season_name}'}
+        if plot:
+            info['plot'] = plot
+        if rating is not None:
+            info['rating'] = rating
+        listitem.setInfo('video', info)
+        xbmcplugin.addDirectoryItem(_handle, get_url(action='series_season', series_name=series_name, season=season_num), listitem, True)
+
+    xbmcplugin.endOfDirectory(_handle)
 
 
 def series_season(params):
@@ -810,11 +846,53 @@ def series_season(params):
 
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + " \\ " + series_name + " \\ " + f"Rada {season}")
 
-    # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)
+    season_str = str(season)
+    series_data = sm.load_series_data(series_name)
+    if not series_data or season_str not in series_data['seasons']:
+        xbmcgui.Dialog().notification('YaWSP', 'Data sezony nenalezena', xbmcgui.NOTIFICATION_WARNING)
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
 
-    # Display episodes menu
-    series_manager.create_episodes_menu(sm, _handle, series_name, season)
+    show_slug = _trakt_search('show', series_name)
+    episode_details = {}
+    if show_slug:
+        eps, _ = _trakt_request(f'shows/{show_slug}/seasons/{season_str}',
+                                {'extended': 'episodes,full,images'})
+        if isinstance(eps, list):
+            for ep in eps:
+                episode_details[str(ep.get('number'))] = ep
+
+    season_data = series_data['seasons'][season_str]
+    for episode_num in sorted(season_data.keys(), key=int):
+        episode = season_data[episode_num]
+        info_data = episode_details.get(str(episode_num), {})
+        label = f"Epizoda {episode_num} - {episode['name']}"
+
+        listitem = xbmcgui.ListItem(label=label)
+        art = {'icon': 'DefaultVideo.png'}
+        shot = info_data.get('images', {}).get('screenshot')
+        thumb = shot[0] if isinstance(shot, list) and shot else None
+        if thumb and not thumb.startswith('http'):
+            thumb = 'https://' + thumb
+        if thumb:
+            art['thumb'] = thumb
+        listitem.setArt(art)
+        listitem.setProperty('IsPlayable', 'true')
+
+        meta = {'title': label}
+        overview = info_data.get('overview')
+        if overview:
+            meta['plot'] = overview
+        rating = info_data.get('rating')
+        if rating is not None:
+            meta['rating'] = rating
+        listitem.setInfo('video', meta)
+
+        url = get_url(action='play', ident=episode['ident'], name=episode['name'])
+        xbmcplugin.addDirectoryItem(_handle, url, listitem, False)
+
+    xbmcplugin.endOfDirectory(_handle)
 
 
 def series_refresh(params):
@@ -868,8 +946,8 @@ def _trakt_request(endpoint, params=None):
 
     try:
         response = _session.get('https://api.trakt.tv/' + endpoint,
-                               headers=headers,
-                               params=params or {}, timeout=10)
+                                headers=headers,
+                                params=params or {}, timeout=10)
         if response.status_code == 200:
             return response.json(), response.headers
         else:
@@ -880,22 +958,72 @@ def _trakt_request(endpoint, params=None):
     return [], {}
 
 
+def _trakt_search(media_type, query):
+    """Search Trakt for a show or movie and return its slug."""
+    data, _ = _trakt_request(f'search/{media_type}', {'query': query, 'limit': 1})
+    if data:
+        item = data[0].get(media_type) or data[0].get('show') or data[0].get('movie')
+        if isinstance(item, dict):
+            ids = item.get('ids', {})
+            return ids.get('slug') or ids.get('trakt')
+    return None
+
+
+def _trakt_show_info(name_or_slug):
+    """Return detailed show info including images."""
+    slug = name_or_slug
+    if not slug or ' ' in slug:
+        slug = _trakt_search('show', name_or_slug)
+    if slug:
+        info, _ = _trakt_request(f'shows/{slug}', {'extended': 'full,images'})
+        if isinstance(info, dict):
+            return info
+    return {}
+
+
+def _trakt_movie_info(name_or_slug):
+    """Return detailed movie info including images."""
+    slug = name_or_slug
+    if not slug or ' ' in slug:
+        slug = _trakt_search('movie', name_or_slug)
+    if slug:
+        info, _ = _trakt_request(f'movies/{slug}', {'extended': 'full,images'})
+        if isinstance(info, dict):
+            return info
+    return {}
+
+
+def _trakt_episode_info(show_slug, season, episode):
+    """Return detailed episode info including screenshot."""
+    if not show_slug:
+        return {}
+    data, _ = _trakt_request(f'shows/{show_slug}/seasons/{season}',
+                             {'extended': 'episodes,full,images'})
+    if isinstance(data, list):
+        for ep in data:
+            if str(ep.get('number')) == str(episode):
+                return ep
+    return {}
+
+
 def series_trending(params):
     """List trending series from Trakt with paging."""
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
-                                _addon.getLocalizedString(30401))
+                                 _addon.getLocalizedString(30401))
 
     page = int(params.get('page', '1'))
     limit = 20
 
-    data, headers = _trakt_request('shows/trending', {'limit': limit, 'page': page})
+    data, headers = _trakt_request('shows/trending',
+                                   {'limit': limit, 'page': page,
+                                    'extended': 'full,images'})
 
     if page > 1:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
         listitem.setArt({'icon': 'DefaultTVShows.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_trending', page=page - 1),
-                                   listitem, True)
+                                    get_url(action='series_trending', page=page - 1),
+                                    listitem, True)
 
     for item in data:
         show = item.get('show', {})
@@ -905,18 +1033,33 @@ def series_trending(params):
         watchers = item.get('watchers', 0)
         label = f"{title} ({watchers} users)"
         listitem = xbmcgui.ListItem(label=label)
-        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        poster = show.get('images', {}).get('poster')
+        thumb = poster[0] if isinstance(poster, list) and poster else None
+        if thumb and not thumb.startswith('http'):
+            thumb = 'https://' + thumb
+        art = {'icon': 'DefaultTVShows.png'}
+        if thumb:
+            art['thumb'] = thumb
+        listitem.setArt(art)
+        info = {'title': title}
+        overview = show.get('overview')
+        if overview:
+            info['plot'] = overview
+        rating = show.get('rating')
+        if rating is not None:
+            info['rating'] = rating
+        listitem.setInfo('video', info)
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_search', series_name=title),
-                                   listitem, True)
+                                    get_url(action='series_search', series_name=title),
+                                    listitem, True)
 
     page_count = int(headers.get('X-Pagination-Page-Count', page))
     if page < page_count:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
         listitem.setArt({'icon': 'DefaultTVShows.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_trending', page=page + 1),
-                                   listitem, True)
+                                    get_url(action='series_trending', page=page + 1),
+                                    listitem, True)
 
     xbmcplugin.endOfDirectory(_handle)
 
@@ -924,19 +1067,21 @@ def series_trending(params):
 def series_popular(params):
     """List popular series from Trakt with paging."""
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name') + ' \\ ' +
-                                _addon.getLocalizedString(30402))
+                                 _addon.getLocalizedString(30402))
 
     page = int(params.get('page', '1'))
     limit = 20
 
-    data, headers = _trakt_request('shows/popular', {'limit': limit, 'page': page})
+    data, headers = _trakt_request('shows/popular',
+                                   {'limit': limit, 'page': page,
+                                    'extended': 'full,images'})
 
     if page > 1:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
         listitem.setArt({'icon': 'DefaultTVShows.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_popular', page=page - 1),
-                                   listitem, True)
+                                    get_url(action='series_popular', page=page - 1),
+                                    listitem, True)
 
     for show in data:
         title = show.get('title')
@@ -951,18 +1096,33 @@ def series_popular(params):
                 watchers = stats.get('watchers', 0)
         label = f"{title} ({watchers} users)"
         listitem = xbmcgui.ListItem(label=label)
-        listitem.setArt({'icon': 'DefaultTVShows.png'})
+        poster = show.get('images', {}).get('poster')
+        thumb = poster[0] if isinstance(poster, list) and poster else None
+        if thumb and not thumb.startswith('http'):
+            thumb = 'https://' + thumb
+        art = {'icon': 'DefaultTVShows.png'}
+        if thumb:
+            art['thumb'] = thumb
+        listitem.setArt(art)
+        info = {'title': title}
+        overview = show.get('overview')
+        if overview:
+            info['plot'] = overview
+        rating = show.get('rating')
+        if rating is not None:
+            info['rating'] = rating
+        listitem.setInfo('video', info)
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_search', series_name=title),
-                                   listitem, True)
+                                    get_url(action='series_search', series_name=title),
+                                    listitem, True)
 
     page_count = int(headers.get('X-Pagination-Page-Count', page))
     if page < page_count:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
         listitem.setArt({'icon': 'DefaultTVShows.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='series_popular', page=page + 1),
-                                   listitem, True)
+                                    get_url(action='series_popular', page=page + 1),
+                                    listitem, True)
 
     xbmcplugin.endOfDirectory(_handle)
 
@@ -1103,14 +1263,32 @@ def movie_detail(params):
     if movie_data['file']:
         movie_file = movie_data['file']
         movie_title = f"{movie_name} - {movie_file['name']}"
+        info = _trakt_movie_info(movie_name)
+        poster = None
+        plot = ''
+        rating = None
+        if info:
+            img = info.get('images', {}).get('poster')
+            poster = img[0] if isinstance(img, list) and img else None
+            if poster and not poster.startswith('http'):
+                poster = 'https://' + poster
+            plot = info.get('overview') or ''
+            rating = info.get('rating')
 
         listitem = xbmcgui.ListItem(label=movie_title)
-        listitem.setArt({'icon': 'DefaultVideo.png'})
+        art = {'icon': 'DefaultVideo.png'}
+        if poster:
+            art['thumb'] = poster
+        listitem.setArt(art)
         listitem.setProperty('IsPlayable', 'true')
+        meta = {'title': movie_title}
+        if plot:
+            meta['plot'] = plot
+        if rating is not None:
+            meta['rating'] = rating
+        listitem.setInfo('video', meta)
 
-        # Generate URL for playing this movie
         url = get_url(action='play', ident=movie_file['ident'], name=movie_file['name'])
-
         xbmcplugin.addDirectoryItem(_handle, url, listitem, False)
 
     xbmcplugin.endOfDirectory(_handle)
@@ -1159,14 +1337,16 @@ def movie_trending(params):
     page = int(params.get('page', '1'))
     limit = 20
 
-    data, headers = _trakt_request('movies/trending', {'limit': limit, 'page': page})
+    data, headers = _trakt_request('movies/trending',
+                                   {'limit': limit, 'page': page,
+                                    'extended': 'full,images'})
 
     if page > 1:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
         listitem.setArt({'icon': 'DefaultMovies.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_trending', page=page - 1),
-                                   listitem, True)
+                                    get_url(action='movie_trending', page=page - 1),
+                                    listitem, True)
 
     for item in data:
         movie = item.get('movie', {})
@@ -1176,18 +1356,33 @@ def movie_trending(params):
         watchers = item.get('watchers', 0)
         label = f"{title} ({watchers} users)"
         listitem = xbmcgui.ListItem(label=label)
-        listitem.setArt({'icon': 'DefaultMovies.png'})
+        poster = movie.get('images', {}).get('poster')
+        thumb = poster[0] if isinstance(poster, list) and poster else None
+        if thumb and not thumb.startswith('http'):
+            thumb = 'https://' + thumb
+        art = {'icon': 'DefaultMovies.png'}
+        if thumb:
+            art['thumb'] = thumb
+        listitem.setArt(art)
+        info = {'title': title}
+        overview = movie.get('overview')
+        if overview:
+            info['plot'] = overview
+        rating = movie.get('rating')
+        if rating is not None:
+            info['rating'] = rating
+        listitem.setInfo('video', info)
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_search', movie_name=title),
-                                   listitem, True)
+                                    get_url(action='movie_search', movie_name=title),
+                                    listitem, True)
 
     page_count = int(headers.get('X-Pagination-Page-Count', page))
     if page < page_count:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
         listitem.setArt({'icon': 'DefaultMovies.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_trending', page=page + 1),
-                                   listitem, True)
+                                    get_url(action='movie_trending', page=page + 1),
+                                    listitem, True)
 
     xbmcplugin.endOfDirectory(_handle)
 
@@ -1199,14 +1394,16 @@ def movie_popular(params):
     page = int(params.get('page', '1'))
     limit = 20
 
-    data, headers = _trakt_request('movies/popular', {'limit': limit, 'page': page})
+    data, headers = _trakt_request('movies/popular',
+                                   {'limit': limit, 'page': page,
+                                    'extended': 'full,images'})
 
     if page > 1:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30206))
         listitem.setArt({'icon': 'DefaultMovies.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_popular', page=page - 1),
-                                   listitem, True)
+                                    get_url(action='movie_popular', page=page - 1),
+                                    listitem, True)
 
     for movie in data:
         title = movie.get('title')
@@ -1221,18 +1418,33 @@ def movie_popular(params):
                 watchers = stats.get('watchers', 0)
         label = f"{title} ({watchers} users)"
         listitem = xbmcgui.ListItem(label=label)
-        listitem.setArt({'icon': 'DefaultMovies.png'})
+        poster = movie.get('images', {}).get('poster')
+        thumb = poster[0] if isinstance(poster, list) and poster else None
+        if thumb and not thumb.startswith('http'):
+            thumb = 'https://' + thumb
+        art = {'icon': 'DefaultMovies.png'}
+        if thumb:
+            art['thumb'] = thumb
+        listitem.setArt(art)
+        info = {'title': title}
+        overview = movie.get('overview')
+        if overview:
+            info['plot'] = overview
+        rating = movie.get('rating')
+        if rating is not None:
+            info['rating'] = rating
+        listitem.setInfo('video', info)
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_search', movie_name=title),
-                                   listitem, True)
+                                    get_url(action='movie_search', movie_name=title),
+                                    listitem, True)
 
     page_count = int(headers.get('X-Pagination-Page-Count', page))
     if page < page_count:
         listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30207))
         listitem.setArt({'icon': 'DefaultMovies.png'})
         xbmcplugin.addDirectoryItem(_handle,
-                                   get_url(action='movie_popular', page=page + 1),
-                                   listitem, True)
+                                    get_url(action='movie_popular', page=page + 1),
+                                    listitem, True)
 
     xbmcplugin.endOfDirectory(_handle)
 
