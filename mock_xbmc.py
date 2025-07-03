@@ -21,6 +21,22 @@ class MockXBMC:
     def translatePath(path):
         return path
 
+    class PlayList:
+        VIDEO = 1
+
+        def __init__(self, type=VIDEO):
+            self.items = []
+
+        def clear(self):
+            self.items = []
+
+        def add(self, url, listitem):
+            self.items.append((url, listitem))
+
+    class Player:
+        def play(self, playlist, startpos=0):
+            print(f"[MOCK PLAYER] play called with {len(getattr(playlist, 'items', []))} items starting at {startpos}")
+
 # Mock xbmcaddon module
 class MockAddon:
     def __init__(self, id=None):

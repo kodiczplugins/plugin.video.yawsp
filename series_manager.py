@@ -589,8 +589,15 @@ def create_episodes_menu(series_manager, handle, series_name, season_num):
         listitem.setArt({'icon': 'DefaultVideo.png'})
         listitem.setProperty('IsPlayable', 'true')
 
-        # Generate URL for playing this episode
-        url = get_url(action='play', ident=episode['ident'], name=episode['name'])
+        # Generate URL for playing this episode with playlist info
+        url = get_url(
+            action='play',
+            ident=episode['ident'],
+            name=episode['name'],
+            series=series_name,
+            season=season_num,
+            episode=episode_num
+        )
 
         xbmcplugin.addDirectoryItem(handle, url, listitem, False)
 

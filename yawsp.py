@@ -554,14 +554,34 @@ def play(params):
     token = revalidate()
     link = getlink(params['ident'], token)
     if link is not None:
-        # headers experiment
         headers = _session.headers
         if headers:
             headers.update({'Cookie': 'wst=' + token})
             link = link + '|' + urlencode(headers)
         listitem = xbmcgui.ListItem(label=params['name'], path=link)
         listitem.setProperty('mimetype', 'application/octet-stream')
+
         xbmcplugin.setResolvedUrl(_handle, True, listitem)
+
+        if 'series' in params and 'season' in params and 'episode' in params:
+            try:
+                playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+                start = int(params['episode'])
+                sm = series_manager.SeriesManager(_addon, _profile)
+                data = sm.load_series_data(params['series']) or {}
+                season_data = data.get('seasons', {}).get(str(params['season']), {})
+                for ep_num in sorted(season_data.keys(), key=int):
+                    if int(ep_num) <= start:
+                        continue
+                    ep = season_data[ep_num]
+                    ep_link = getlink(ep['ident'], token)
+                    if headers:
+                        ep_link = ep_link + '|' + urlencode(headers)
+                    li = xbmcgui.ListItem(label=f"Epizoda {ep_num} - {ep['name']}", path=ep_link)
+                    li.setProperty('mimetype', 'application/octet-stream')
+                    playlist.add(url=ep_link, listitem=li)
+            except Exception:
+                traceback.print_exc()
     else:
         popinfo(_addon.getLocalizedString(30107), icon=xbmcgui.NOTIFICATION_WARNING)
         xbmcplugin.setResolvedUrl(_handle, False, xbmcgui.ListItem())
@@ -889,7 +909,14 @@ def series_season(params):
             meta['rating'] = rating
         listitem.setInfo('video', meta)
 
-        url = get_url(action='play', ident=episode['ident'], name=episode['name'])
+        url = get_url(
+            action='play',
+            ident=episode['ident'],
+            name=episode['name'],
+            series=series_name,
+            season=season,
+            episode=episode_num
+        )
         xbmcplugin.addDirectoryItem(_handle, url, listitem, False)
 
     xbmcplugin.endOfDirectory(_handle)
